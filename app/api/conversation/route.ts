@@ -7,6 +7,10 @@ import { createConversationRecord } from '@/lib/db/conversations';
 import { randomUUID } from 'crypto';
 import { loadConfig } from '@/lib/config';
 
+
+export const runtime = 'nodejs';              // ensure Node runtime (not edge)
+export const dynamic = 'force-dynamic'; 
+
 let isInitialized = false;
 
 /**
@@ -20,21 +24,22 @@ async function ensureInitialized() {
     isInitialized = true;
   }
 }
-
-const ALLOWED_ORIGIN = '*';
-
-export async function OPTIONS() {
-  // Preflight handler
-  return new NextResponse(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    },
-  });
+// cors helper refelect requests headers and no credentials
+function corsHeaders(req: NextRequest) {
+  const reqHeaders = req.headers.get('access-control-request-headers') ?? 'Content-Type';
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    'Access-Control-Allow-Headers': reqHeaders,
+    'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
+  };
 }
 
+export async function OPTIONS(req: NextRequest) {
+  // Preflight handler
+  return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
+}
 /**
  * POST /api/conversation
  *
@@ -62,14 +67,31 @@ export async function POST(req: NextRequest) {
     if (!(file instanceof Blob)) {
   return NextResponse.json(
     { error: '`htmlDoc` must be a file field' },
-    { status: 400, headers: { 'Access-Control-Allow-Origin': '*' } }
+    { status: 400,  headers: corsHeaders(req) }
   );
 }
 
     // Parse the conversation from HTML
-    const html = await file.text();
-    const conversation = await parseHtmlToConversation(html, model);
+    const html = await (file as Blob).text();
+    if (html.length > 5_000_000) { // ~5MB
+      return NextResponse.json(
+        { error: 'HTML too large' },
+        { status: 413, headers: corsHeaders(req) }
+      );
+    }
 
+
+
+    let conversation;
+    try {
+      conversation = await parseHtmlToConversation(html, model);
+    } catch (e: any) {
+      console.error('parseHtmlToConversation failed:', e);
+      return NextResponse.json(
+        { error: 'Parse failed', detail: String(e?.message || e) },
+        { status: 400, headers: corsHeaders(req) }
+      );
+    }
     // Generate a unique ID for the conversation
     const conversationId = randomUUID();
 
@@ -92,12 +114,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       { url: permalink },
-      {
-        status: 201,
-        headers: {
-          'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-        },
-      }
+       { status: 201, headers: corsHeaders(req) }             //add CORS on success
     );
   } catch (err) {
   console.error('Error processing conversation:', err);
