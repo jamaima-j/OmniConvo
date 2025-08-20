@@ -20,6 +20,7 @@ async function scrape() {
   isRequesting = true;
 
   const apiUrl = `https://jomniconvo.duckdns.org/api/conversation`;
+  
   const body = new FormData();
 
   // raw HTML
@@ -29,15 +30,20 @@ async function scrape() {
 
   try {
     const res = await fetch(apiUrl, { method: 'POST', body });
-    console.log('res =>', res, apiUrl);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${text.slice(0,200)}`);
+    }
+    
+    
+    
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
       throw new Error(`Expected JSON, got ${ct}: ${text.slice(0,200)}`);
     }
     
     
-    const { url } = await res.json();
+    const { url } = JSON.parse(text); 
     window.open(url, '_blank'); // view the saved conversation
   } catch (err) {
     alert(`Error saving conversation: ${err.message}`);

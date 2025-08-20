@@ -60,8 +60,11 @@ export async function POST(req: NextRequest) {
 
     // Validate input
     if (!(file instanceof Blob)) {
-      return NextResponse.json({ error: '`htmlDoc` must be a file field' }, { status: 400 });
-    }
+  return NextResponse.json(
+    { error: '`htmlDoc` must be a file field' },
+    { status: 400, headers: { 'Access-Control-Allow-Origin': '*' } }
+  );
+}
 
     // Parse the conversation from HTML
     const html = await file.text();
@@ -97,7 +100,10 @@ export async function POST(req: NextRequest) {
       }
     );
   } catch (err) {
-    console.error('Error processing conversation:', err);
-    return NextResponse.json({ error: 'Internal error, see logs' }, { status: 500 });
-  }
+  console.error('Error processing conversation:', err);
+  return NextResponse.json(
+    { error: 'Internal error, see logs' },
+    { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } }
+  );
+}
 }
