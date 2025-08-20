@@ -14,10 +14,11 @@
     "https://gemini.google.com/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
-    "https://grok.com/*"
+    "https://grok.com/*",
+    "https://jomniconvo.duckdns.org/*" 
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
+    "extension_pages": "script-src 'self'; object-src 'self'; font-src 'self' data: https://fonts.gstatic.com https://use.typekit.net;"
   },
   "content_scripts": [
     {
