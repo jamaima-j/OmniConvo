@@ -36,10 +36,15 @@ function corsHeaders(req: NextRequest) {
   };
 }
 
+function toErrString(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 export async function OPTIONS(req: NextRequest) {
   // Preflight handler
   return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
 }
+
 /**
  * POST /api/conversation
  *
