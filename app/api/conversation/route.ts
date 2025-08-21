@@ -36,6 +36,10 @@ function corsHeaders(req: NextRequest) {
   };
 }
 
+function toErrString(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 export async function OPTIONS(req: NextRequest) {
   // Preflight handler
   return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
@@ -87,13 +91,15 @@ export async function POST(req: NextRequest) {
     let conversation;
     try {
       conversation = await parseHtmlToConversation(html, model);
-    } catch (e: any) {
-      console.error('parseHtmlToConversation failed:', e);
+    } catch (e: unknown) {
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error('parseHtmlToConversation failed:', detail);
       return NextResponse.json(
-        { error: 'Parse failed', detail: String(e?.message || e) },
+        { error: 'Parse failed', detail },
         { status: 400, headers: corsHeaders(req) }
-      );
-    }
+  );
+}
+
     // Generate a unique ID for the conversation
     const conversationId = randomUUID();
 
@@ -110,7 +116,7 @@ export async function POST(req: NextRequest) {
     };
 
     const record = await createConversationRecord(dbInput);
-
+        const base = process.env.NEXT_PUBLIC_BASE_URL || 'https://jomniconvo.duckdns.org';
     // Generate the permalink using the database-generated ID
     const permalink = `${process.env.NEXT_PUBLIC_BASE_URL}/c/${record.id}`;
 
@@ -118,10 +124,11 @@ export async function POST(req: NextRequest) {
       { url: permalink },
        { status: 201, headers: corsHeaders(req) }             //add CORS on success
     );
-  } catch (err) {
-  console.error('Error processing conversation:', err);
+} catch (err: unknown) {
+  const detail = err instanceof Error ? err.message : String(err);
+  console.error('Error processing conversation:', detail);
   return NextResponse.json(
-    { error: 'Internal error, see logs' },
+    { error: 'Internal error, see logs', detail },
     { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } }
   );
 }
