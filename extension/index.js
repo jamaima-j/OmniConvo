@@ -10,7 +10,7 @@ chrome.runtime.onMessage.addListener(function (request, _, sendResponse) {
     model = request.model;
   }
   sendResponse({ success: true });
-  return true;
+  
 });
 
 async function scrape() {
