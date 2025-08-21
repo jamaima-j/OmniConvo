@@ -36,10 +36,6 @@ function corsHeaders(req: NextRequest) {
   };
 }
 
-function toErrString(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 export async function OPTIONS(req: NextRequest) {
   // Preflight handler
   return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
@@ -71,11 +67,11 @@ export async function POST(req: NextRequest) {
 
     // Validate input
     if (!(file instanceof Blob)) {
-  return NextResponse.json(
-    { error: '`htmlDoc` must be a file field' },
-    { status: 400,  headers: corsHeaders(req) }
-  );
-}
+       return NextResponse.json(
+          { error: '`htmlDoc` must be a file field' },
+          { status: 400,  headers: corsHeaders(req) }
+        );
+    }
 
     // Parse the conversation from HTML
     const html = await (file as Blob).text();
@@ -116,10 +112,9 @@ export async function POST(req: NextRequest) {
     };
 
     const record = await createConversationRecord(dbInput);
-        const base = process.env.NEXT_PUBLIC_BASE_URL || 'https://jomniconvo.duckdns.org';
     // Generate the permalink using the database-generated ID
-    const permalink = `${process.env.NEXT_PUBLIC_BASE_URL}/c/${record.id}`;
-
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://jomniconvo.duckdns.org';
+    const permalink = `${baseUrl}/c/${record.id}`; 
     return NextResponse.json(
       { url: permalink },
        { status: 201, headers: corsHeaders(req) }             //add CORS on success
@@ -129,7 +124,7 @@ export async function POST(req: NextRequest) {
   console.error('Error processing conversation:', detail);
   return NextResponse.json(
     { error: 'Internal error, see logs', detail },
-    { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } }
+    { status: 500, headers:  corsHeaders(req)}
   );
 }
 }
