@@ -1,16 +1,21 @@
-// @ts-nocheck
-
 import { getConversationRecord } from '@/lib/db/conversations';
 import { s3Client } from '@/lib/storage/s3';
 
-export default async function ConversationPage({ params }) {
+// Define a local prop type so we don't fight Next.js's generated PageProps
+interface ConversationPageProps {
+  params: {
+    id: string;
+  };
+}
+
+export default async function ConversationPage({ params }: ConversationPageProps) {
   const record = await getConversationRecord(params.id);
 
   if (!record) {
     return <div className="p-6">Conversation not found.</div>;
   }
 
-  let signedUrl = null;
+  let signedUrl: string | null = null;
   try {
     signedUrl = await s3Client.getSignedReadUrl(record.contentKey);
   } catch (err) {
@@ -24,8 +29,12 @@ export default async function ConversationPage({ params }) {
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-bold">Conversation #{record.id}</h1>
-      <p><strong>Model:</strong> {record.model}</p>
-      <p><strong>Scraped:</strong> {new Date(record.scrapedAt).toLocaleString()}</p>
+      <p>
+        <strong>Model:</strong> {record.model}
+      </p>
+      <p>
+        <strong>Scraped:</strong> {new Date(record.scrapedAt).toLocaleString()}
+      </p>
 
       <h2 className="text-xl font-semibold">Conversation:</h2>
       <iframe
