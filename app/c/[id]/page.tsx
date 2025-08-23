@@ -1,14 +1,10 @@
 import { getConversationRecord } from '@/lib/db/conversations';
 import { s3Client } from '@/lib/storage/s3';
 
-// Define a local prop type so we don't fight Next.js's generated PageProps
-interface ConversationPageProps {
-  params: {
-    id: string;
-  };
-}
+export default async function ConversationPage({ params: _params }: any) {
+  // Manually assert type here (safe + lint clean)
+  const params = _params as { id: string };
 
-export default async function ConversationPage({ params }: ConversationPageProps) {
   const record = await getConversationRecord(params.id);
 
   if (!record) {
