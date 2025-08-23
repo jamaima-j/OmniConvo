@@ -1,18 +1,17 @@
 import { getConversationRecord } from '@/lib/db/conversations';
 import { s3Client } from '@/lib/storage/s3';
 
-interface PageProps {
+export default async function ConversationPage({
+  params,
+}: {
   params: { id: string };
-}
-
-export default async function ConversationPage({ params }: PageProps) {
+}) {
   const record = await getConversationRecord(params.id);
 
   if (!record) {
     return <div className="p-6">Conversation not found.</div>;
   }
 
-  // Generate signed URL to load the conversation from S3
   let signedUrl: string | null = null;
   try {
     signedUrl = await s3Client.getSignedReadUrl(record.contentKey);
