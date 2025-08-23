@@ -1,12 +1,16 @@
 import { getConversationRecord } from '@/lib/db/conversations';
 import { s3Client } from '@/lib/storage/s3';
 
-export default async function ConversationPage({ params: _params }: any) {
-  // Manually assert type here (safe + lint clean)
-  const params = _params as { id: string };
+type RouteParams = { id: string };
 
-  const record = await getConversationRecord(params.id);
+export default async function ConversationPage({
+  params,
+}: {
+  params: Promise<RouteParams>;
+}) {
+  const { id } = await params; // Next 15 can pass params as a Promise
 
+  const record = await getConversationRecord(id);
   if (!record) {
     return <div className="p-6">Conversation not found.</div>;
   }
@@ -25,12 +29,8 @@ export default async function ConversationPage({ params: _params }: any) {
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-bold">Conversation #{record.id}</h1>
-      <p>
-        <strong>Model:</strong> {record.model}
-      </p>
-      <p>
-        <strong>Scraped:</strong> {new Date(record.scrapedAt).toLocaleString()}
-      </p>
+      <p><strong>Model:</strong> {record.model}</p>
+      <p><strong>Scraped:</strong> {new Date(record.scrapedAt).toLocaleString()}</p>
 
       <h2 className="text-xl font-semibold">Conversation:</h2>
       <iframe
