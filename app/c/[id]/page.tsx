@@ -1,11 +1,7 @@
 import { getConversationRecord } from '@/lib/db/conversations';
 import { s3Client } from '@/lib/storage/s3';
 
-export default async function ConversationPage({
-  params,
-}: {
-  params: { id: string };
-}) {
+export default async function ConversationPage({ params }: any) {
   const record = await getConversationRecord(params.id);
 
   if (!record) {
