@@ -1,12 +1,10 @@
 import { getConversationRecord } from '@/lib/db/conversations';
 import { s3Client } from '@/lib/storage/s3';
 
-export default async function ConversationPage({
-  params,
-}: {
-  params: { id: string };
-}) {
-  const record = await getConversationRecord(params.id);
+export default async function ConversationPage({ params }: { params: unknown }) {
+  const { id } = params as { id: string }; // safely cast
+
+  const record = await getConversationRecord(id);
 
   if (!record) {
     return <div className="p-6">Conversation not found.</div>;
