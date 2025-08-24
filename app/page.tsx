@@ -1,9 +1,9 @@
+import Link from 'next/link';
 import { HelpCircle } from 'lucide-react';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import Link from 'next/link';
 import { listRecentConversations } from '@/lib/db/conversations';
 // Mock data for the cards
 const mockCards = [
@@ -56,7 +56,7 @@ const mockCards = [
 export default async function Home() {
   const items = await listRecentConversations(24);
 
-const Home = () => {
+
   return (
     <div className='flex flex-col min-h-screen bg-gray-100'>
       <header className='bg-gray-200 p-4 flex justify-between items-center'>
@@ -141,4 +141,4 @@ const Home = () => {
 };
 
 
-}
+
