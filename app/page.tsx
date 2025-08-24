@@ -1,4 +1,7 @@
 // app/page.tsx
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 import Link from 'next/link';
 import { HelpCircle } from 'lucide-react';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
@@ -74,15 +77,21 @@ function toCard(item: ConversationLike): CardData {
   const views = Number(item.views ?? item.viewCount ?? item.stats?.views ?? 0) || 0;
   const related = Number(item.related ?? item.relatedCount ?? item.stats?.related ?? 0) || 0;
   const created = item.createdAt ?? item.created_at ?? item.updatedAt;
-
   const avatar = (username.charAt(0) || 'U').toUpperCase();
 
   return { id, avatar, username, platform, views, days: daysAgo(created), related };
 }
 
 export default async function Home() {
-  const raw = await listRecentConversations(24);
-  const items: ConversationLike[] = Array.isArray(raw) ? (raw as ConversationLike[]) : [];
+  // Try DB; if it fails (e.g., during build or no DB), fall back to mocks.
+  let items: ConversationLike[] = [];
+  try {
+    const raw = await listRecentConversations(24);
+    items = Array.isArray(raw) ? (raw as ConversationLike[]) : [];
+  } catch {
+    // swallow: we'll fall back to mocks
+  }
+
   const cards: CardData[] = items.length > 0 ? items.map(toCard) : mockCards;
 
   return (
