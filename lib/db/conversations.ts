@@ -73,6 +73,9 @@ export async function getConversationRecord(id: string): Promise<ConversationRec
     WHERE id = $1
   `;
 
+
+
+
   try {
     const result = await pool.query(query, [id]);
 
@@ -84,4 +87,34 @@ export async function getConversationRecord(id: string): Promise<ConversationRec
   } catch (error) {
     throw new Error(`Failed to get conversation record: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+
+export type ConversationListItem = {
+  id: number;
+  model: string;
+  scrapedAt: string;
+  contentKey: string;
+  sourceHtmlBytes: number;
+  views: number;
+  createdAt: string;
+};
+
+export async function listRecentConversations(limit = 24): Promise<ConversationListItem[]> {
+  const pool = dbClient.getPool();
+  const sql = `
+    SELECT 
+      id,
+      model,
+      scraped_at        AS "scrapedAt",
+      content_key       AS "contentKey",
+      source_html_bytes AS "sourceHtmlBytes",
+      views,
+      created_at        AS "createdAt"
+    FROM conversations
+    ORDER BY id DESC
+    LIMIT $1
+  `;
+  const { rows } = await pool.query(sql, [limit]);
+  return rows as ConversationListItem[];
 }

@@ -1,40 +1,39 @@
-import { getConversationRecord } from '@/lib/db/conversations';
-import { s3Client } from '@/lib/storage/s3';
+import Link from 'next/link';
 
 type RouteParams = { id: string };
 
 export default async function ConversationPage({
   params,
-}: {
-  params: Promise<RouteParams>;
-}) {
-  const { id } = await params; // Next 15 can pass params as a Promise
+}: { params: Promise<RouteParams> }) {
+  const { id } = await params;
 
-  const record = await getConversationRecord(id);
-  if (!record) {
+  const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ''}/api/conversation/${id}`, {
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
     return <div className="p-6">Conversation not found.</div>;
   }
 
-  let signedUrl: string | null = null;
-  try {
-    signedUrl = await s3Client.getSignedReadUrl(record.contentKey);
-  } catch (err) {
-    console.error('Error generating signed URL:', err);
-  }
-
-  if (!signedUrl) {
-    return <div className="p-6">Failed to load conversation content.</div>;
-  }
+  const { url, model, scrapedAt } = await res.json() as {
+    url: string; model: string; scrapedAt: string;
+  };
 
   return (
     <div className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Conversation #{record.id}</h1>
-      <p><strong>Model:</strong> {record.model}</p>
-      <p><strong>Scraped:</strong> {new Date(record.scrapedAt).toLocaleString()}</p>
+      <div className="flex items-center justify-between">
+        <Link href="/" className="text-sm underline">← Back to Conversations</Link>
+        <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm underline">
+          Open in new tab
+        </a>
+      </div>
 
-      <h2 className="text-xl font-semibold">Conversation:</h2>
+      <h1 className="text-2xl font-bold">Conversation #{id}</h1>
+      <p><strong>Model:</strong> {model}</p>
+      <p><strong>Scraped:</strong> {new Date(scrapedAt).toLocaleString()}</p>
+
       <iframe
-        src={signedUrl}
+        src={url}
         className="w-full h-[80vh] border rounded"
         title="Conversation Content"
       />
