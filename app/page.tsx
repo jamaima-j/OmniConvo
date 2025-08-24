@@ -7,14 +7,40 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { listRecentConversations } from '@/lib/db/conversations';
 
+type PrimitiveDate = string | number | Date;
+
 type CardData = {
   id: string | number;
-  avatar: string;
+  avatar: string;        // single letter
   username: string;
   platform: string;
   views: number;
-  days: number;      // days ago
+  days: number;          // days ago
   related: number;
+};
+
+type StatsLike = { views?: number; related?: number } | null;
+type UserLike = { name?: string | null } | null;
+
+type ConversationLike = {
+  id?: string | number;
+  conversationId?: string | number;
+  _id?: string | number;
+  slug?: string | number;
+  username?: string;
+  user?: UserLike;
+  title?: string;
+  name?: string;
+  platform?: string;
+  model?: string;
+  views?: number;
+  viewCount?: number;
+  stats?: StatsLike;
+  related?: number;
+  relatedCount?: number;
+  createdAt?: PrimitiveDate;
+  created_at?: PrimitiveDate;
+  updatedAt?: PrimitiveDate;
 };
 
 // Fallback data if DB returns nothing
@@ -26,28 +52,38 @@ const mockCards: CardData[] = [
   { id: 5, avatar: 'S', username: 'test', platform: 'ChatGPT', views: 24, days: 85, related: 0 },
 ];
 
-function daysAgo(d: string | number | Date | undefined): number {
-  const date = d ? new Date(d) : new Date();
+function daysAgo(d?: PrimitiveDate): number {
+  if (!d) return 0;
+  const date = new Date(d);
+  if (Number.isNaN(date.getTime())) return 0;
   const ms = Date.now() - date.getTime();
   return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
 }
 
-// Normalize DB item into CardData
-function toCard(item: any): CardData {
-  const id = item?.id ?? item?.conversationId ?? item?._id ?? item?.slug ?? Math.random().toString(36).slice(2);
-  const username = String(item?.username ?? item?.user?.name ?? item?.title ?? item?.name ?? 'user');
-  const platform = String(item?.platform ?? item?.model ?? 'ChatGPT');
-  const views = Number(item?.views ?? item?.viewCount ?? item?.stats?.views ?? 0) || 0;
-  const related = Number(item?.related ?? item?.relatedCount ?? item?.stats?.related ?? 0) || 0;
-  const created = item?.createdAt ?? item?.created_at ?? item?.updatedAt ?? undefined;
-  const avatar = (username?.[0] ?? 'U').toUpperCase();
+function toCard(item: ConversationLike): CardData {
+  const maybeId = item.id ?? item.conversationId ?? item._id ?? item.slug;
+  const id: string | number =
+    typeof maybeId === 'string' || typeof maybeId === 'number'
+      ? maybeId
+      : Math.random().toString(36).slice(2);
+
+  const usernameRaw = item.username ?? item.user?.name ?? item.title ?? item.name ?? 'user';
+  const username = String(usernameRaw ?? 'user');
+
+  const platform = String(item.platform ?? item.model ?? 'ChatGPT');
+  const views = Number(item.views ?? item.viewCount ?? item.stats?.views ?? 0) || 0;
+  const related = Number(item.related ?? item.relatedCount ?? item.stats?.related ?? 0) || 0;
+  const created = item.createdAt ?? item.created_at ?? item.updatedAt;
+
+  const avatar = (username.charAt(0) || 'U').toUpperCase();
 
   return { id, avatar, username, platform, views, days: daysAgo(created), related };
 }
 
 export default async function Home() {
-  const items = await listRecentConversations(24);
-  const cards: CardData[] = Array.isArray(items) && items.length > 0 ? items.map(toCard) : mockCards;
+  const raw = await listRecentConversations(24);
+  const items: ConversationLike[] = Array.isArray(raw) ? (raw as ConversationLike[]) : [];
+  const cards: CardData[] = items.length > 0 ? items.map(toCard) : mockCards;
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-100">
@@ -83,7 +119,10 @@ export default async function Home() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {cards.map((card) => (
-            <Card key={card.id} className="overflow-hidden shadow-sm hover:shadow transition-shadow duration-200 border border-gray-200">
+            <Card
+              key={String(card.id)}
+              className="overflow-hidden shadow-sm hover:shadow transition-shadow duration-200 border border-gray-200"
+            >
               <CardContent className="pt-6 px-6">
                 <div className="flex items-start space-x-4">
                   <Avatar
@@ -100,7 +139,10 @@ export default async function Home() {
                     <AvatarFallback className="text-white text-sm">{card.avatar}</AvatarFallback>
                   </Avatar>
                   <div className="flex-1 pt-1">
-                    <Link href={`/c/${String(card.id)}`} className="text-sm font-medium text-gray-800 leading-relaxed hover:underline">
+                    <Link
+                      href={`/c/${String(card.id)}`}
+                      className="text-sm font-medium text-gray-800 leading-relaxed hover:underline"
+                    >
                       {card.username}
                     </Link>
                     <div className="mt-1">
