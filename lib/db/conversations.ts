@@ -1,6 +1,7 @@
 import { dbClient } from './client';
 import { ConversationRecord, CreateConversationInput } from './types';
 
+
 /**
  * Creates a new conversation record in the database
  *
@@ -66,9 +67,11 @@ export async function getConversationRecord(id: string): Promise<ConversationRec
     SELECT 
       id,
       model,
-      scraped_at as "scrapedAt",
-      content_key as "contentKey",
-      created_at as "createdAt"
+      scraped_at         AS "scrapedAt",
+      content_key        AS "contentKey",
+      source_html_bytes  AS "sourceHtmlBytes",
+      views,
+      created_at         AS "createdAt"
     FROM conversations
     WHERE id = $1
   `;
@@ -88,7 +91,6 @@ export async function getConversationRecord(id: string): Promise<ConversationRec
     throw new Error(`Failed to get conversation record: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
-
 
 export type ConversationListItem = {
   id: number;

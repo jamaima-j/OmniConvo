@@ -35,42 +35,32 @@ async function scrape() {
   const timer = setTimeout(() => controller.abort(), 30000);
 
   try {
-    const res = await fetch(apiUrl, { method: 'POST', body, signal: controller.signal });
-    const text = await res.text();
+    const res = await fetch('https://jomniconvo.duckdns.org/api/conversation', { method: 'POST', body });
+    const contentType = res.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json') ? await res.json() : { raw: await res.text() };
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error(`Expected JSON, got: ${text.slice(0, 200)}`);
+    if (!res.ok) {
+      const msg = typeof payload === 'object' ? JSON.stringify(payload).slice(0, 300) : String(payload).slice(0, 300);
+      throw new Error(`HTTP ${res.status}: ${msg}`);
     }
 
-    const { url } = data || {};
-    if (!url) throw new Error('Server did not return a URL');
+    // Prefer the canonical URL from the server
+    const base = new URL(apiUrl).origin;
+    const dest =
+      payload.url
+        ?? `${base}/c/${payload.slug ?? payload.id}`;
 
-    // Copy permalink (best-effort)
-    try { await navigator.clipboard.writeText(url); } catch {}
-
-    // Little success toast
-    try {
-      const toast = document.createElement('div');
-      toast.textContent = 'Saved! URL copied to clipboard';
-      Object.assign(toast.style, {
-        position: 'fixed', bottom: '20px', right: '20px',
-        background: '#111827', color: '#fff', padding: '10px 12px',
-        borderRadius: '10px', zIndex: 999999, fontSize: '13px'
-      });
-      document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), 2200);
-    } catch {}
-
-    window.open(url, '_blank');
+    // If this runs in the background/service worker:
+    if (chrome?.tabs?.create) {
+      chrome.tabs.create({ url: dest });
+    } else {
+      // Fallback if you're running this in a content script
+      window.open(dest, '_blank', 'noopener,noreferrer');
+    }
   } catch (err) {
-    alert(`Error saving conversation: ${err?.message || err}`);
+    console.error('Error saving conversation:', err);
+    alert(`Failed to save conversation: ${err.message}`);
   } finally {
-    clearTimeout(timer);
-    isRequesting = false; // <- important so you can save again
+    isRequesting = false;
   }
 }

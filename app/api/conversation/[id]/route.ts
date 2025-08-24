@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getConversationRecord } from '@/lib/db/conversations';
 import { s3Client } from '@/lib/storage/s3';
 import { loadConfig } from '@/lib/config';
-
+import { createConversationRecord } from '@/lib/db/conversations';
 let isInitialized = false;
 
 /**
@@ -48,5 +48,43 @@ export async function GET(
     }
 
     return NextResponse.json({ error: 'Internal error, see logs' }, { status: 500 });
+  }
+}
+
+function genContentKey(): string {
+  return `conv_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+
+export async function POST(req: Request) {
+  try {
+    const form = await req.formData();
+    const blob = form.get('htmlDoc');
+    const model = String(form.get('model') ?? 'ChatGPT');
+
+    if (!(blob instanceof Blob)) {
+      return NextResponse.json({ error: 'htmlDoc missing' }, { status: 400 });
+    }
+
+    const html = await blob.text();
+    // We’re not storing HTML here—just metadata your schema already supports
+    const sourceHtmlBytes = new TextEncoder().encode(html).length;
+    const contentKey = genContentKey();
+
+    const record = await createConversationRecord({
+      model,
+      scrapedAt: new Date(),
+      contentKey,
+      sourceHtmlBytes,
+      views: 0,
+    });
+
+    const base = process.env.NEXT_PUBLIC_BASE_URL ?? new URL(req.url).origin;
+    const url = `${base}/c/${record.id}`;
+
+    return NextResponse.json({ id: record.id, url }, { status: 201 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
