@@ -1,130 +1,149 @@
+// ========================================
+// app/api/conversation/route.ts  
+// ========================================
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
-import { parseHtmlToConversation } from '@/lib/parsers';
-import { dbClient } from '@/lib/db/client';
-import { s3Client } from '@/lib/storage/s3';
-import { CreateConversationInput } from '@/lib/db/types';
-import { createConversationRecord } from '@/lib/db/conversations';
 import { randomUUID } from 'crypto';
 import { loadConfig } from '@/lib/config';
+import { dbClient } from '@/lib/db/client';
+import { s3Client } from '@/lib/storage/s3';
+import { parseHtmlToConversation } from '@/lib/parsers';
+import { createConversationRecord } from '@/lib/db/conversations';
+import type { CreateConversationInput } from '@/lib/db/types';
+import { safeJson } from '@/app/helpers/safeJson';
 
-
-export const runtime = 'nodejs';              // ensure Node runtime (not edge)
-export const dynamic = 'force-dynamic'; 
-
+// -------- robust one-time init (per route bundle) ----------
 let isInitialized = false;
+let initPromise: Promise<void> | null = null;
 
-/**
- * Initialize services if not already initialized
- */
-async function ensureInitialized() {
-  if (!isInitialized) {
+async function reallyInitialize() {
+  console.log('=== BYPASS CONFIG INITIALIZATION ===');
+  
+  // Initialize database WITHOUT using config
+  console.log('Initializing database client directly...');
+  await dbClient.initialize(); // Use environment variables directly
+  
+  // Still use config for S3 since that's probably working
+  try {
     const config = loadConfig();
-    await dbClient.initialize(config.database);
     s3Client.initialize(config.s3);
-    isInitialized = true;
+    console.log('S3 initialized from config');
+  } catch (configError) {
+    console.error('Config loading failed, but database should still work:', configError);
+    // Continue anyway since database is what matters
+  }
+  
+  isInitialized = true;
+  console.log('=== INITIALIZATION COMPLETE (POST) ===');
+}
+
+async function ensureInitialized() {
+  if (isInitialized) {
+    try {
+      dbClient.getPool(); // sanity check: throws if not ready
+      return;
+    } catch (error) {
+      console.log('Pool check failed (POST), reinitializing:', error);
+      isInitialized = false;
+    }
+  }
+  if (!initPromise) {
+    initPromise = reallyInitialize().catch((e) => {
+      console.error('POST route initialization failed:', e);
+      initPromise = null;
+      isInitialized = false;
+      throw e;
+    });
+  }
+  await initPromise;
+
+  // final guard
+  try {
+    dbClient.getPool();
+  } catch (error) {
+    console.error('Final pool check failed (POST):', error);
+    isInitialized = false;
+    throw new Error('Database client not initialized');
   }
 }
-// cors helper refelect requests headers and no credentials
+
+// -------- CORS ----------
 function corsHeaders(req: NextRequest) {
   const reqHeaders = req.headers.get('access-control-request-headers') ?? 'Content-Type';
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': reqHeaders,
     'Access-Control-Max-Age': '86400',
-    'Vary': 'Origin',
+    Vary: 'Origin',
   };
 }
 
 export async function OPTIONS(req: NextRequest) {
-  // Preflight handler
   return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
 }
 
-
 /**
  * POST /api/conversation
- *
- * Handles storing a new conversation from HTML input
- *
- * Request body (multipart/form-data):
- * - htmlDoc: File - The HTML document containing the conversation
- * - model: string - The AI model used (e.g., "ChatGPT", "Claude")
- *
- * Response:
- * - 201: { url: string } - The permalink URL for the conversation
- * - 400: { error: string } - Invalid request
- * - 500: { error: string } - Server error
+ * multipart/form-data:
+ *  - htmlDoc: File
+ *  - model: string
+ * returns: { id, url }
  */
 export async function POST(req: NextRequest) {
   try {
-    // Initialize services on first request
+    console.log('=== POST /api/conversation START ===');
     await ensureInitialized();
+    console.log('POST route initialized successfully');
 
-    const formData = await req.formData();
-    const file = formData.get('htmlDoc');
-    const model = formData.get('model')?.toString() ?? 'ChatGPT';
+    const form = await req.formData();
+    const file = form.get('htmlDoc');
+    const model = form.get('model')?.toString() ?? 'ChatGPT';
 
-    // Validate input
     if (!(file instanceof Blob)) {
-       return NextResponse.json(
-          { error: '`htmlDoc` must be a file field' },
-          { status: 400,  headers: corsHeaders(req) }
-        );
+      return safeJson({ error: '`htmlDoc` must be a file field' }, 400, corsHeaders(req));
     }
 
-    // Parse the conversation from HTML
     const html = await (file as Blob).text();
-    if (html.length > 5_000_000) { // ~5MB
-      return NextResponse.json(
-        { error: 'HTML too large' },
-        { status: 413, headers: corsHeaders(req) }
-      );
+    if (html.length > 5_000_000) {
+      return safeJson({ error: 'HTML too large' }, 413, corsHeaders(req));
     }
 
+    // Parse to structured content
+    const parsed = await parseHtmlToConversation(html, model);
 
-
-    let conversation;
-    try {
-      conversation = await parseHtmlToConversation(html, model);
-    } catch (e: unknown) {
-      const detail = e instanceof Error ? e.message : String(e);
-      console.error('parseHtmlToConversation failed:', detail);
-      return NextResponse.json(
-        { error: 'Parse failed', detail },
-        { status: 400, headers: corsHeaders(req) }
-  );
-}
-
-    // Generate a unique ID for the conversation
+    // Store content in S3 (keyed by UUID)
     const conversationId = randomUUID();
+    const contentKey = await s3Client.storeConversation(conversationId, parsed.content);
 
-    // Store only the conversation content in S3
-    const contentKey = await s3Client.storeConversation(conversationId, conversation.content);
-
-    // Create the database record with metadata
-    const dbInput: CreateConversationInput = {
-      model: conversation.model,
-      scrapedAt: new Date(conversation.scrapedAt),
-      sourceHtmlBytes: conversation.sourceHtmlBytes,
+    // Create DB record (metadata only)
+    const input: CreateConversationInput = {
+      model: parsed.model,
+      scrapedAt: new Date(parsed.scrapedAt),
+      sourceHtmlBytes: parsed.sourceHtmlBytes,
       views: 0,
       contentKey,
     };
+    
+    console.log('Creating conversation record...');
+    const record = await createConversationRecord(input);
+    console.log('Conversation record created successfully');
 
-    const record = await createConversationRecord(dbInput);
-    // Generate the permalink using the database-generated ID
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://jomniconvo.duckdns.org';
-    const permalink = `${baseUrl}/c/${record.id}`; 
-    return NextResponse.json(
-      { url: permalink },
-       { status: 201, headers: corsHeaders(req) }             //add CORS on success
-    );
-} catch (err: unknown) {
-  const detail = err instanceof Error ? err.message : String(err);
-  console.error('Error processing conversation:', detail);
-  return NextResponse.json(
-    { error: 'Internal error, see logs', detail },
-    { status: 500, headers:  corsHeaders(req)}
-  );
-}
+    // Permalink
+    const base = process.env.NEXT_PUBLIC_BASE_URL ?? new URL(req.url).origin;
+    const idVal =
+      typeof (record as any).id === 'bigint' ? Number((record as any).id) : (record as any).id;
+    const url = `${base}/c/${idVal}`;
+
+    console.log('=== POST /api/conversation SUCCESS ===');
+    return safeJson({ id: idVal, url }, 201, corsHeaders(req));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('=== POST /api/conversation ERROR ===');
+    console.error('Error:', detail);
+    console.error('Stack:', err instanceof Error ? err.stack : 'No stack');
+    return safeJson({ error: 'Internal error, see logs', detail }, 500, corsHeaders(req));
+  }
 }

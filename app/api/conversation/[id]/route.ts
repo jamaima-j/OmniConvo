@@ -1,90 +1,124 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getConversationRecord } from '@/lib/db/conversations';
-import { s3Client } from '@/lib/storage/s3';
-import { loadConfig } from '@/lib/config';
-import { createConversationRecord } from '@/lib/db/conversations';
-let isInitialized = false;
+// ========================================
+// app/api/conversation/[id]/route.ts
+// ========================================
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-/**
- * Initialize services if not already initialized
- */
-async function ensureInitialized() {
-  if (!isInitialized) {
+import { NextRequest, NextResponse } from 'next/server';
+import { loadConfig } from '@/lib/config';
+import { dbClient } from '@/lib/db/client';
+import { s3Client } from '@/lib/storage/s3';
+import { getConversationRecord } from '@/lib/db/conversations';
+import { safeJson } from '@/app/helpers/safeJson';
+
+let isInitialized = false;
+let initPromise: Promise<void> | null = null;
+
+async function reallyInitialize() {
+  console.log('=== BYPASS CONFIG INITIALIZATION ===');
+  
+  // Initialize database WITHOUT using config
+  console.log('Initializing database client directly...');
+  await dbClient.initialize(); // Use environment variables directly
+  
+  // Still use config for S3 since that's probably working
+  try {
     const config = loadConfig();
     s3Client.initialize(config.s3);
-    isInitialized = true;
+    console.log('S3 initialized from config');
+  } catch (configError) {
+    console.error('Config loading failed, but database should still work:', configError);
+    // Continue anyway since database is what matters for this route
   }
+  
+  isInitialized = true;
+  console.log('=== INITIALIZATION COMPLETE (GET) ===');
+}
+
+async function ensureInitialized() {
+  if (isInitialized) {
+    try {
+      dbClient.getPool(); // throws if not ready
+      return;
+    } catch (error) {
+      console.log('Pool check failed (GET), reinitializing:', error);
+      isInitialized = false;
+    }
+  }
+  if (!initPromise) {
+    initPromise = reallyInitialize().catch((e) => {
+      console.error('GET route initialization failed:', e);
+      initPromise = null;
+      isInitialized = false;
+      throw e;
+    });
+  }
+  await initPromise;
+
+  // final guard
+  try {
+    dbClient.getPool();
+  } catch (error) {
+    console.error('Final pool check failed (GET):', error);
+    isInitialized = false;
+    throw new Error('Database client not initialized');
+  }
+}
+
+// CORS
+function corsHeaders(req: NextRequest) {
+  const reqHeaders = req.headers.get('access-control-request-headers') ?? 'Content-Type';
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': reqHeaders,
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
+  };
+}
+
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
+}
+
+function normalizeRec(rec: any) {
+  const n = (v: any) => (typeof v === 'bigint' ? Number(v) : v);
+  return { ...rec, id: n(rec.id), sourceHtmlBytes: n(rec.sourceHtmlBytes), views: n(rec.views) };
 }
 
 /**
  * GET /api/conversation/[id]
- *
- * Retrieves a signed URL for accessing a conversation's content
- *
- * @param request - The incoming request
- * @param context - Route context containing the conversation ID
- *
- * Response:
- * - 200: { url: string } - The signed URL to access the conversation content
- * - 404: { error: string } - Conversation not found
- * - 500: { error: string } - Server error
+ *  - ?raw=1|true -> returns the DB row
+ *  - else        -> { url: <signed-read-url> } from S3
  */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
+    console.log('=== GET /api/conversation/[id] START ===');
+    console.log('Request params:', params);
+    
     await ensureInitialized();
-    const id = (await params).id;
-    const record = await getConversationRecord(id);
-    const signedUrl = await s3Client.getSignedReadUrl(record.contentKey);
+    console.log('GET route initialized successfully');
 
-    return NextResponse.json({ url: signedUrl });
+    console.log('Fetching conversation record...');
+    const rec = await getConversationRecord(params.id);
+    console.log('Got conversation record');
+
+    const raw = request.nextUrl.searchParams.get('raw');
+    if (raw === '1' || raw === 'true') {
+      console.log('Returning raw record');
+      return safeJson(normalizeRec(rec), 200, corsHeaders(request));
+    }
+
+    console.log('Getting signed URL from S3');
+    const signedUrl = await s3Client.getSignedReadUrl(rec.contentKey);
+    console.log('=== GET /api/conversation/[id] SUCCESS ===');
+    return safeJson({ url: signedUrl }, 200, corsHeaders(request));
   } catch (error) {
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    const status = /not found/i.test(msg) ? 404 : 500;
+    console.error('=== GET /api/conversation/[id] ERROR ===');
     console.error('Error retrieving conversation:', error);
-
-    if (error instanceof Error && error.message.includes('not found')) {
-      return NextResponse.json({ error: error.message }, { status: 404 });
-    }
-
-    return NextResponse.json({ error: 'Internal error, see logs' }, { status: 500 });
-  }
-}
-
-function genContentKey(): string {
-  return `conv_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-}
-
-
-export async function POST(req: Request) {
-  try {
-    const form = await req.formData();
-    const blob = form.get('htmlDoc');
-    const model = String(form.get('model') ?? 'ChatGPT');
-
-    if (!(blob instanceof Blob)) {
-      return NextResponse.json({ error: 'htmlDoc missing' }, { status: 400 });
-    }
-
-    const html = await blob.text();
-    // We’re not storing HTML here—just metadata your schema already supports
-    const sourceHtmlBytes = new TextEncoder().encode(html).length;
-    const contentKey = genContentKey();
-
-    const record = await createConversationRecord({
-      model,
-      scrapedAt: new Date(),
-      contentKey,
-      sourceHtmlBytes,
-      views: 0,
-    });
-
-    const base = process.env.NEXT_PUBLIC_BASE_URL ?? new URL(req.url).origin;
-    const url = `${base}/c/${record.id}`;
-
-    return NextResponse.json({ id: record.id, url }, { status: 201 });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('Error message:', msg);
+    return safeJson({ error: msg }, status, corsHeaders(request));
   }
 }

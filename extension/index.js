@@ -1,66 +1,59 @@
-'use strict';
+// background.js or service worker
+
 let isRequesting = false;
 let model = 'ChatGPT';
 
-chrome.runtime.onMessage.addListener(function (request, _, sendResponse) {
-  if (request.action === 'scrape') {
-    scrape()
-      .then(() => sendResponse({ ok: true }))
-      .catch(err => sendResponse({ ok: false, error: String(err?.message || err) }));
-    return true; // keep channel open for async sendResponse
-  }
- if (request.action === 'model' && typeof request.model === 'string') {
-    model = request.model;
-    sendResponse({ ok: true });
-    return; // sync response is fine
-  }
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  if (request.action === 'scrape') scrape();
+  if (request.action === 'model') model = request.model;
+  sendResponse({ success: true });
 });
 
 async function scrape() {
-  const htmlDoc = document.documentElement.innerHTML;
-  if (!htmlDoc || isRequesting) return;
+  if (isRequesting) return;
+  const htmlDoc = await getActiveTabHtml();
+  if (!htmlDoc) return;
 
   isRequesting = true;
+  const apiUrl = 'https://jomniconvo.duckdns.org/api/conversation';
 
-  const apiUrl = `https://jomniconvo.duckdns.org/api/conversation`;
-  
   const body = new FormData();
-
-  // raw HTML
   body.append('htmlDoc', new Blob([htmlDoc], { type: 'text/plain; charset=utf-8' }));
-  // model
   body.append('model', model);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const res = await fetch('https://jomniconvo.duckdns.org/api/conversation', { method: 'POST', body });
-    const contentType = res.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json') ? await res.json() : { raw: await res.text() };
+    const res = await fetch(apiUrl, { method: 'POST', body, signal: controller.signal });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
 
-    if (!res.ok) {
-      const msg = typeof payload === 'object' ? JSON.stringify(payload).slice(0, 300) : String(payload).slice(0, 300);
-      throw new Error(`HTTP ${res.status}: ${msg}`);
-    }
+    // Use the canonical URL from the server; fall back to /c/:id
+    const origin = new URL(apiUrl).origin;
+    const dest = (typeof payload.url === 'string' && payload.url)
+      ? payload.url
+      : `${origin}/c/${payload.id}`;
 
-    // Prefer the canonical URL from the server
-    const base = new URL(apiUrl).origin;
-    const dest =
-      payload.url
-        ?? `${base}/c/${payload.slug ?? payload.id}`;
-
-    // If this runs in the background/service worker:
-    if (chrome?.tabs?.create) {
-      chrome.tabs.create({ url: dest });
-    } else {
-      // Fallback if you're running this in a content script
-      window.open(dest, '_blank', 'noopener,noreferrer');
-    }
+    if (chrome?.tabs?.create) chrome.tabs.create({ url: dest });
+    else window.open(dest, '_blank', 'noopener,noreferrer');
   } catch (err) {
-    console.error('Error saving conversation:', err);
-    alert(`Failed to save conversation: ${err.message}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('Error saving conversation:', msg);
+    // optional: alert(msg);
   } finally {
+    clearTimeout(timeoutId);
     isRequesting = false;
   }
+}
+
+// helper: grab HTML of active tab
+async function getActiveTabHtml() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return '';
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => document.documentElement.innerHTML
+  });
+  return result || '';
 }
