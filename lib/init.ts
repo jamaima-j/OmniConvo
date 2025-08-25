@@ -1,41 +1,44 @@
-import { loadConfig } from './config';
-import { dbClient } from './db/client';
-import { s3Client } from './storage/s3';
+// lib/init.ts
+import { dbClient } from "@/lib/db/client";
+import { s3Client } from "@/lib/storage/s3";
+import { loadConfig } from "@/lib/config";
 
-/**
- * Initialize all application services
- * This should be called when the application starts
- * @throws Error if initialization fails
- */
-export async function initializeApp(): Promise<void> {
-  try {
-    // Load configuration
-    const config = loadConfig();
+let isInitialized = false;
+let initPromise: Promise<void> | null = null;
 
-    // Initialize database client
-    await dbClient.initialize(config.database);
-    console.log('Database client initialized');
+async function reallyInitialize() {
+  console.log("=== INIT DB + S3 (lib/init.ts) ===");
 
-    // Initialize S3 client
-    s3Client.initialize(config.s3);
-    console.log('S3 client initialized');
+  // Initialize database client (no args — reads from env vars)
+  await dbClient.initialize();
+  console.log("Database client initialized");
 
-    // Set global base URL
-    process.env.NEXT_PUBLIC_BASE_URL = config.baseUrl;
-  } catch (error) {
-    console.error('Failed to initialize application:', error);
-    throw error;
-  }
+  // Initialize S3 client (needs config)
+  const config = loadConfig();
+  s3Client.initialize(config.s3);
+  console.log("S3 client initialized");
+
+  isInitialized = true;
 }
 
-/**
- * Cleanup function to be called when the application shuts down
- */
-export async function cleanup(): Promise<void> {
-  try {
-    await dbClient.close();
-    console.log('Database connections closed');
-  } catch (error) {
-    console.error('Error during cleanup:', error);
+export async function ensureInitialized() {
+  if (isInitialized) {
+    try {
+      dbClient.getPool(); // throws if pool missing
+      return;
+    } catch {
+      isInitialized = false;
+    }
   }
+
+  if (!initPromise) {
+    initPromise = reallyInitialize().catch((err) => {
+      initPromise = null;
+      isInitialized = false;
+      throw err;
+    });
+  }
+
+  await initPromise;
+  dbClient.getPool(); // sanity check
 }
