@@ -90,11 +90,16 @@ function normalizeRec(rec: RawRec) {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Record<string, string | string[]> }
 ) {
   try {
     await ensureInitialized();
-    const rec = await getConversationRecord(params.id);
+
+    const id = Array.isArray(context.params.id)
+      ? context.params.id[0]
+      : context.params.id;
+
+    const rec = await getConversationRecord(id);
 
     const raw = request.nextUrl.searchParams.get("raw");
     if (raw === "1" || raw === "true") {
