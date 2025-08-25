@@ -16,21 +16,20 @@ let initPromise: Promise<void> | null = null;
 
 async function reallyInitialize() {
   console.log('=== BYPASS CONFIG INITIALIZATION ===');
-  
+
   // Initialize database WITHOUT using config
   console.log('Initializing database client directly...');
-  await dbClient.initialize(); // Use environment variables directly
-  
-  // Still use config for S3 since that's probably working
+  await dbClient.initialize(); // Uses env vars
+
+  // Initialize S3 with config
   try {
     const config = loadConfig();
     s3Client.initialize(config.s3);
     console.log('S3 initialized from config');
   } catch (configError) {
     console.error('Config loading failed, but database should still work:', configError);
-    // Continue anyway since database is what matters for this route
   }
-  
+
   isInitialized = true;
   console.log('=== INITIALIZATION COMPLETE (GET) ===');
 }
@@ -45,6 +44,7 @@ async function ensureInitialized() {
       isInitialized = false;
     }
   }
+
   if (!initPromise) {
     initPromise = reallyInitialize().catch((e) => {
       console.error('GET route initialization failed:', e);
@@ -53,9 +53,9 @@ async function ensureInitialized() {
       throw e;
     });
   }
+
   await initPromise;
 
-  // final guard
   try {
     dbClient.getPool();
   } catch (error) {
@@ -65,7 +65,7 @@ async function ensureInitialized() {
   }
 }
 
-// CORS
+// CORS headers
 function corsHeaders(req: NextRequest) {
   const reqHeaders = req.headers.get('access-control-request-headers') ?? 'Content-Type';
   return {
@@ -81,9 +81,32 @@ export async function OPTIONS(req: NextRequest) {
   return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
 }
 
-function normalizeRec(rec: any) {
-  const n = (v: any) => (typeof v === 'bigint' ? Number(v) : v);
-  return { ...rec, id: n(rec.id), sourceHtmlBytes: n(rec.sourceHtmlBytes), views: n(rec.views) };
+// --- Types ---
+type RawRec = {
+  id: string | number | bigint;
+  model: string;
+  scrapedAt: string | Date;
+  contentKey: string;
+  sourceHtmlBytes: string | number | bigint;
+  views: string | number | bigint;
+  createdAt: string | Date;
+};
+
+// Normalize database record values
+function normalizeRec(rec: RawRec) {
+  const n = (v: string | number | bigint): number =>
+    typeof v === 'bigint'
+      ? Number(v)
+      : typeof v === 'string'
+      ? Number(v)
+      : v;
+
+  return {
+    ...rec,
+    id: n(rec.id),
+    sourceHtmlBytes: n(rec.sourceHtmlBytes),
+    views: n(rec.views),
+  };
 }
 
 /**
@@ -95,7 +118,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   try {
     console.log('=== GET /api/conversation/[id] START ===');
     console.log('Request params:', params);
-    
+
     await ensureInitialized();
     console.log('GET route initialized successfully');
 
@@ -106,11 +129,11 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     const raw = request.nextUrl.searchParams.get('raw');
     if (raw === '1' || raw === 'true') {
       console.log('Returning raw record');
-      return safeJson(normalizeRec(rec), 200, corsHeaders(request));
+      return safeJson(normalizeRec(rec as RawRec), 200, corsHeaders(request));
     }
 
     console.log('Getting signed URL from S3');
-    const signedUrl = await s3Client.getSignedReadUrl(rec.contentKey);
+    const signedUrl = await s3Client.getSignedReadUrl((rec as RawRec).contentKey);
     console.log('=== GET /api/conversation/[id] SUCCESS ===');
     return safeJson({ url: signedUrl }, 200, corsHeaders(request));
   } catch (error) {

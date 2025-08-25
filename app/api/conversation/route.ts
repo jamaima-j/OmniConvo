@@ -1,5 +1,5 @@
 // ========================================
-// app/api/conversation/route.ts  
+// app/api/conversation/route.ts
 // ========================================
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,27 +14,21 @@ import { createConversationRecord } from '@/lib/db/conversations';
 import type { CreateConversationInput } from '@/lib/db/types';
 import { safeJson } from '@/app/helpers/safeJson';
 
-// -------- robust one-time init (per route bundle) ----------
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
 async function reallyInitialize() {
   console.log('=== BYPASS CONFIG INITIALIZATION ===');
-  
-  // Initialize database WITHOUT using config
-  console.log('Initializing database client directly...');
-  await dbClient.initialize(); // Use environment variables directly
-  
-  // Still use config for S3 since that's probably working
+  await dbClient.initialize();
+
   try {
     const config = loadConfig();
     s3Client.initialize(config.s3);
     console.log('S3 initialized from config');
   } catch (configError) {
-    console.error('Config loading failed, but database should still work:', configError);
-    // Continue anyway since database is what matters
+    console.error('Config loading failed, DB should still work:', configError);
   }
-  
+
   isInitialized = true;
   console.log('=== INITIALIZATION COMPLETE (POST) ===');
 }
@@ -42,13 +36,14 @@ async function reallyInitialize() {
 async function ensureInitialized() {
   if (isInitialized) {
     try {
-      dbClient.getPool(); // sanity check: throws if not ready
+      dbClient.getPool();
       return;
     } catch (error) {
       console.log('Pool check failed (POST), reinitializing:', error);
       isInitialized = false;
     }
   }
+
   if (!initPromise) {
     initPromise = reallyInitialize().catch((e) => {
       console.error('POST route initialization failed:', e);
@@ -57,9 +52,9 @@ async function ensureInitialized() {
       throw e;
     });
   }
+
   await initPromise;
 
-  // final guard
   try {
     dbClient.getPool();
   } catch (error) {
@@ -69,7 +64,7 @@ async function ensureInitialized() {
   }
 }
 
-// -------- CORS ----------
+// CORS
 function corsHeaders(req: NextRequest) {
   const reqHeaders = req.headers.get('access-control-request-headers') ?? 'Content-Type';
   return {
@@ -96,7 +91,6 @@ export async function POST(req: NextRequest) {
   try {
     console.log('=== POST /api/conversation START ===');
     await ensureInitialized();
-    console.log('POST route initialized successfully');
 
     const form = await req.formData();
     const file = form.get('htmlDoc');
@@ -111,14 +105,11 @@ export async function POST(req: NextRequest) {
       return safeJson({ error: 'HTML too large' }, 413, corsHeaders(req));
     }
 
-    // Parse to structured content
     const parsed = await parseHtmlToConversation(html, model);
 
-    // Store content in S3 (keyed by UUID)
     const conversationId = randomUUID();
     const contentKey = await s3Client.storeConversation(conversationId, parsed.content);
 
-    // Create DB record (metadata only)
     const input: CreateConversationInput = {
       model: parsed.model,
       scrapedAt: new Date(parsed.scrapedAt),
@@ -126,24 +117,26 @@ export async function POST(req: NextRequest) {
       views: 0,
       contentKey,
     };
-    
-    console.log('Creating conversation record...');
-    const record = await createConversationRecord(input);
-    console.log('Conversation record created successfully');
 
-    // Permalink
+    const record = await createConversationRecord(input);
+
+    // ✅ Fix: allow string | number | bigint
+    const rawId: string | number | bigint = record.id as string | number | bigint;
+    const idVal: number | string =
+      typeof rawId === 'bigint'
+        ? Number(rawId)
+        : typeof rawId === 'string'
+        ? Number(rawId)
+        : rawId;
+
     const base = process.env.NEXT_PUBLIC_BASE_URL ?? new URL(req.url).origin;
-    const idVal =
-      typeof (record as any).id === 'bigint' ? Number((record as any).id) : (record as any).id;
     const url = `${base}/c/${idVal}`;
 
-    console.log('=== POST /api/conversation SUCCESS ===');
+    console.log('=== POST /api/conversation SUCCESS ===', { id: idVal, url });
     return safeJson({ id: idVal, url }, 201, corsHeaders(req));
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    console.error('=== POST /api/conversation ERROR ===');
-    console.error('Error:', detail);
-    console.error('Stack:', err instanceof Error ? err.stack : 'No stack');
+    console.error('=== POST /api/conversation ERROR ===', detail);
     return safeJson({ error: 'Internal error, see logs', detail }, 500, corsHeaders(req));
   }
 }
