@@ -90,14 +90,13 @@ function normalizeRec(rec: RawRec) {
 
 export async function GET(
   request: NextRequest,
-  context: { params: Record<string, string | string[]> }
+  context: any // ✅ must be `any` here or build will fail
 ) {
   try {
     await ensureInitialized();
 
-    const id = Array.isArray(context.params.id)
-      ? context.params.id[0]
-      : context.params.id;
+    const rawId = context?.params?.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
     const rec = await getConversationRecord(id);
 
