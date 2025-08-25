@@ -15,7 +15,6 @@ let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
 async function reallyInitialize() {
-  console.log("=== INIT DB + S3 (GET) ===");
   await dbClient.initialize();
   try {
     const config = loadConfig();
@@ -88,14 +87,16 @@ function normalizeRec(rec: RawRec) {
   };
 }
 
-export async function GET(
-  request: NextRequest,
-  context: any // ✅ must be `any` here or build will fail
-) {
+// ✅ Define a reusable type instead of `any`
+type RouteContext = {
+  params: Record<string, string | string[]>;
+};
+
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
     await ensureInitialized();
 
-    const rawId = context?.params?.id;
+    const rawId = context.params.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
     const rec = await getConversationRecord(id);
