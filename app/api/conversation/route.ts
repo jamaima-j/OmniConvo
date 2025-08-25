@@ -5,13 +5,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "crypto";
-import { loadConfig } from "@/lib/config";
 import { dbClient } from "@/lib/db/client";
 import { s3Client } from "@/lib/storage/s3";
-import { parseHtmlToConversation } from "@/lib/parsers";
 import { createConversationRecord } from "@/lib/db/conversations";
-import type { CreateConversationInput } from "@/lib/db/types";
 import { safeJson } from "@/app/helpers/safeJson";
 
 let isInitialized = false;
@@ -20,33 +16,19 @@ let initPromise: Promise<void> | null = null;
 async function reallyInitialize() {
   console.log("=== INIT DB + S3 (POST) ===");
   await dbClient.initialize();
-  try {
-    const config = loadConfig();
-    s3Client.initialize(config.s3);
-  } catch (err) {
-    console.error("S3 init failed (POST):", err);
-  }
   isInitialized = true;
 }
 
 async function ensureInitialized() {
-  if (isInitialized) {
-    try {
-      dbClient.getPool();
-      return;
-    } catch {
-      isInitialized = false;
-    }
-  }
+  if (isInitialized) return;
   if (!initPromise) {
-    initPromise = reallyInitialize().catch((e) => {
+    initPromise = reallyInitialize().catch((err) => {
       initPromise = null;
       isInitialized = false;
-      throw e;
+      throw err;
     });
   }
   await initPromise;
-  dbClient.getPool();
 }
 
 function corsHeaders(req: NextRequest) {
@@ -69,62 +51,37 @@ export async function POST(req: NextRequest) {
   try {
     await ensureInitialized();
 
-    const form = await req.formData();
-    const file = form.get("htmlDoc");
-    const model = form.get("model")?.toString() ?? "ChatGPT";
+    const formData = await req.formData();
+    const htmlFile = formData.get("htmlDoc");
+    const model = String(formData.get("model") || "unknown");
 
-    if (!(file instanceof Blob)) {
-      return safeJson(
-        { error: "`htmlDoc` must be a file field" },
-        400,
-        corsHeaders(req)
-      );
+    if (!(htmlFile instanceof Blob)) {
+      return safeJson({ error: "Missing htmlDoc" }, 400, corsHeaders(req));
     }
 
-    const html = await file.text();
-    if (html.length > 5_000_000) {
-      return safeJson({ error: "HTML too large" }, 413, corsHeaders(req));
-    }
+    const htmlText = await htmlFile.text();
 
-    const parsed = await parseHtmlToConversation(html, model);
+    // Generate unique ID for conversation
+    const conversationId = crypto.randomUUID();
 
-    const conversationId = randomUUID();
-    const contentKey = await s3Client.storeConversation(
-      conversationId,
-      parsed.content
-    );
+    // Upload to S3
+    const key = await s3Client.storeConversation(conversationId, htmlText);
 
-    const input: CreateConversationInput = {
-      model: parsed.model,
-      scrapedAt: new Date(parsed.scrapedAt),
-      sourceHtmlBytes: parsed.sourceHtmlBytes,
+    // Save DB record (match CreateConversationInput type)
+    const saved = await createConversationRecord({
+      model,
+      contentKey: key,
+      scrapedAt: new Date(),
+      sourceHtmlBytes: htmlText.length,
       views: 0,
-      contentKey,
-    };
+    });
 
-    const record = await createConversationRecord(input);
+    const url = `/c/${saved.id}`;
 
-    const base =
-      process.env.NEXT_PUBLIC_BASE_URL ?? new URL(req.url).origin;
-
-    // type-safe id conversion
-    const rawId = (record as { id: string | number | bigint }).id;
-    const idVal =
-      typeof rawId === "bigint"
-        ? Number(rawId)
-        : typeof rawId === "string"
-        ? parseInt(rawId, 10)
-        : rawId;
-
-    const url = `${base}/c/${idVal}`;
-
-    return safeJson({ id: idVal, url }, 201, corsHeaders(req));
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return safeJson(
-      { error: "Internal error, see logs", detail },
-      500,
-      corsHeaders(req)
-    );
+    return safeJson({ id: saved.id, url }, 200, corsHeaders(req));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error("Error in POST /api/conversation:", msg);
+    return safeJson({ error: msg }, 500, corsHeaders(req));
   }
 }

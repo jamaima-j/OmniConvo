@@ -6,7 +6,7 @@
   "action": {
     "default_popup": "popup.html"
   },
-  "permissions": ["identity", "activeTab", "tabs", "webNavigation"],
+  "permissions": ["identity", "activeTab", "tabs", "webNavigation","scripting"],
   "host_permissions": [
     "https://*.google.com/*",
     "https://meta.ai/*",
