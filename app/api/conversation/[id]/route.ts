@@ -87,17 +87,19 @@ function normalizeRec(rec: RawRec) {
   };
 }
 
-// ✅ Define a reusable type instead of `any`
-type RouteContext = {
-  params: Record<string, string | string[]>;
-};
-
-export async function GET(request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: unknown) {
   try {
     await ensureInitialized();
 
-    const rawId = context.params.id;
+    // safely extract id
+    const params = (context as { params?: Record<string, string | string[]> })
+      ?.params;
+    const rawId = params?.id;
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
+
+    if (!id) {
+      return safeJson({ error: "Missing conversation id" }, 400, corsHeaders(request));
+    }
 
     const rec = await getConversationRecord(id);
 
