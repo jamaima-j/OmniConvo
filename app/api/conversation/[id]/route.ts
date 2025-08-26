@@ -56,19 +56,17 @@ export async function OPTIONS(req: NextRequest) {
   return new Response(null, { status: 204, headers: corsHeaders(req) });
 }
 
-export async function GET(
-  req: NextRequest,
-  context: { params: { id: string } }
-) {
+export async function GET(req: NextRequest) {
   try {
     await ensureInitialized();
 
-    const id = context.params.id;
+    // Extract `id` from the pathname: /api/conversation/[id]
+    const id = req.nextUrl.pathname.split("/").pop();
     if (!id) {
       return safeJson({ error: "Missing id" }, 400, corsHeaders(req));
     }
 
-    const rec = await getConversationRecord(id); // keep id as string
+    const rec = await getConversationRecord(id);
     if (!rec) {
       return safeJson({ error: "Conversation not found" }, 404, corsHeaders(req));
     }
