@@ -6,11 +6,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 
-type Props = {
-  params: {
-    id: string;
-  };
-};
+type RouteParams = { id: string };
 
 function toLocalString(d: Date | string | undefined): string {
   if (!d) return "";
@@ -18,15 +14,22 @@ function toLocalString(d: Date | string | undefined): string {
   return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleString();
 }
 
-export default async function ConversationPage({ params }: Props) {
-  const id = params.id;
+export default async function ConversationPage({
+  params,
+}: {
+  // 👇 Next 15 expects a Promise here
+  params: Promise<RouteParams>;
+}) {
+  // Resolve the lazy params
+  const { id } = await params;
 
-  // fetch metadata
-  const metaRes = await fetch(
-    `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}?raw=1`,
-    { cache: "no-store" }
-  );
+  const base =
+    process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:3000";
 
+  // 1) fetch metadata for the conversation (DB row)
+  const metaRes = await fetch(`${base}/api/conversation/${id}?raw=1`, {
+    cache: "no-store",
+  });
   if (metaRes.status === 404) return notFound();
   if (!metaRes.ok) return notFound();
 
@@ -40,14 +43,15 @@ export default async function ConversationPage({ params }: Props) {
     views: number;
   };
 
-  // fetch signed URL for the HTML
-  const urlRes = await fetch(
-    `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}`,
-    { cache: "no-store" }
-  );
-
+  // 2) fetch signed URL for the HTML
+  const urlRes = await fetch(`${base}/api/conversation/${id}`, {
+    cache: "no-store",
+  });
   if (!urlRes.ok) return notFound();
   const { url } = (await urlRes.json()) as { url: string };
+
+  // 3) fetch the actual HTML to render inline (Grok-like)
+  const html = await (await fetch(url, { cache: "no-store" })).text();
 
   return (
     <main className="container mx-auto max-w-4xl px-4 py-8">
@@ -63,11 +67,16 @@ export default async function ConversationPage({ params }: Props) {
               rel="noopener noreferrer"
               className="text-sm underline"
             >
-              Open in new tab
+              Open raw HTML
             </a>
           </div>
 
-          <h1 className="text-2xl font-bold">Conversation #{rec.id}</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold">Conversation #{rec.id}</h1>
+            <span className="text-xs rounded-full px-2 py-1 border">
+              Source: Grok
+            </span>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
             <p>
@@ -84,10 +93,11 @@ export default async function ConversationPage({ params }: Props) {
             </p>
           </div>
 
-          {/* Render the conversation HTML inline instead of iframe */}
+          {/* Render the saved conversation content inline */}
           <div
             className="prose dark:prose-invert max-w-none border rounded-lg p-4 bg-white"
-            dangerouslySetInnerHTML={{ __html: await fetch(url).then((r) => r.text()) }}
+            // The content comes from your own S3 object
+            dangerouslySetInnerHTML={{ __html: html }}
           />
         </CardContent>
       </Card>
