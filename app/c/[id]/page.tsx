@@ -1,35 +1,32 @@
 // app/c/[id]/page.tsx
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import { notFound } from "next/navigation";
-import Link from "next/link";
-import { Card, CardContent } from "@/components/ui/card";
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { Card, CardContent } from '@/components/ui/card';
 
-type RouteParams = { id: string };
+type Params = { id: string };
 
-function toLocalString(d: Date | string | undefined): string {
-  if (!d) return "";
-  const dt = typeof d === "string" ? new Date(d) : d;
-  return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleString();
+// Utility
+function fmtBytes(n: number | null | undefined): string {
+  if (!n || n <= 0) return '0 bytes';
+  const k = 1024;
+  const sizes = ['bytes','KB','MB','GB'];
+  const i = Math.floor(Math.log(n) / Math.log(k));
+  return `${(n / Math.pow(k, i)).toFixed(0)} ${sizes[i]}`;
+}
+function toLocalString(d: string | Date | null | undefined): string {
+  if (!d) return '';
+  const dt = typeof d === 'string' ? new Date(d) : d;
+  return Number.isNaN(dt.getTime()) ? '' : dt.toLocaleString();
 }
 
-export default async function ConversationPage({
-  params,
-}: {
-  // 👇 Next 15 expects a Promise here
-  params: Promise<RouteParams>;
-}) {
-  // Resolve the lazy params
-  const { id } = await params;
+export default async function Page(props: { params: Promise<Params> }) {
+  const { id } = await props.params;
 
-  const base =
-    process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/+$/, "") ?? "http://localhost:3000";
-
-  // 1) fetch metadata for the conversation (DB row)
-  const metaRes = await fetch(`${base}/api/conversation/${id}?raw=1`, {
-    cache: "no-store",
-  });
+  // 1) fetch metadata
+  const metaRes = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}?raw=1`, { cache: 'no-store' });
   if (metaRes.status === 404) return notFound();
   if (!metaRes.ok) return notFound();
 
@@ -37,68 +34,47 @@ export default async function ConversationPage({
     id: number;
     model: string;
     scrapedAt: string;
-    sourceHtmlBytes: number;
     contentKey: string;
+    sourceHtmlBytes: number;
     createdAt: string;
     views: number;
   };
 
-  // 2) fetch signed URL for the HTML
-  const urlRes = await fetch(`${base}/api/conversation/${id}`, {
-    cache: "no-store",
-  });
+  // 2) signed URL
+  const urlRes = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}`, { cache: 'no-store' });
   if (!urlRes.ok) return notFound();
   const { url } = (await urlRes.json()) as { url: string };
 
-  // 3) fetch the actual HTML to render inline (Grok-like)
-  const html = await (await fetch(url, { cache: "no-store" })).text();
-
   return (
-    <main className="container mx-auto max-w-4xl px-4 py-8">
+    <main className="container mx-auto max-w-4xl px-4 py-6">
+      {/* small top bar only */}
+      <div className="flex items-center justify-between mb-3">
+        <Link href="/" className="text-sm underline">← Back to Conversations</Link>
+        <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm underline">Open raw HTML</a>
+      </div>
+
+      {/* slim meta row */}
+      <div className="text-xs text-gray-500 mb-2 flex gap-4">
+        <span><strong>Model:</strong> {rec.model}</span>
+        <span><strong>Scraped:</strong> {toLocalString(rec.scrapedAt)}</span>
+        <span><strong>Size:</strong> {fmtBytes(rec.sourceHtmlBytes)}</span>
+      </div>
+
+      {/* viewer */}
       <Card className="shadow-sm border border-gray-200">
-        <CardContent className="p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <Link href="/" className="text-sm underline">
-              ← Back to Conversations
-            </Link>
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm underline"
-            >
-              Open raw HTML
-            </a>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold">Conversation #{rec.id}</h1>
-            <span className="text-xs rounded-full px-2 py-1 border">
-              Source: Grok
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-            <p>
-              <strong>Model:</strong> {rec.model}
-            </p>
-            <p>
-              <strong>Scraped:</strong> {toLocalString(rec.scrapedAt)}
-            </p>
-            <p>
-              <strong>Size:</strong> {rec.sourceHtmlBytes} bytes
-            </p>
-            <p>
-              <strong>Content key:</strong> {rec.contentKey}
-            </p>
-          </div>
-
-          {/* Render the saved conversation content inline */}
-          <div
-            className="prose dark:prose-invert max-w-none border rounded-lg p-4 bg-white"
-            // The content comes from your own S3 object
-            dangerouslySetInnerHTML={{ __html: html }}
+        <CardContent className="p-0">
+          <style
+            // minimal CSS so code blocks look nice
+            dangerouslySetInnerHTML={{
+              __html: `
+                .viewer iframe{ width:100%; height:80vh; border:0; }
+                @media (max-width: 768px){ .viewer iframe{ height:70vh; } }
+              `
+            }}
           />
+          <div className="viewer">
+            <iframe src={url} title={'conversation-' + rec.id} />
+          </div>
         </CardContent>
       </Card>
     </main>

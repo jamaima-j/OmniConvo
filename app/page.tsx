@@ -15,8 +15,8 @@ type PrimitiveDate = string | number | Date;
 type CardData = {
   id: string | number;
   avatar: string;        // single letter
-  username: string;
-  platform: string;
+  title: string;         // "Conversation #<id>"
+  platform: string;      // Grok / ChatGPT / etc.
   views: number;
   days: number;          // days ago
   related: number;
@@ -48,11 +48,11 @@ type ConversationLike = {
 
 // Fallback data if DB returns nothing
 const mockCards: CardData[] = [
-  { id: 1, avatar: 'S', username: 'test', platform: 'ChatGPT', views: 25, days: 66, related: 0 },
-  { id: 2, avatar: 'P', username: 'test', platform: 'ChatGPT', views: 43, days: 79, related: 0 },
-  { id: 3, avatar: 'U', username: 'test', platform: 'Claude',  views: 70, days: 101, related: 0 },
-  { id: 4, avatar: 'C', username: 'test', platform: 'ChatGPT', views: 36, days: 88, related: 0 },
-  { id: 5, avatar: 'S', username: 'test', platform: 'ChatGPT', views: 24, days: 85, related: 0 },
+  { id: 1, avatar: 'G', title: 'Conversation #1', platform: 'Grok',    views: 25, days: 66, related: 0 },
+  { id: 2, avatar: 'G', title: 'Conversation #2', platform: 'Grok',    views: 43, days: 79, related: 0 },
+  { id: 3, avatar: 'C', title: 'Conversation #3', platform: 'Claude',  views: 70, days: 101, related: 0 },
+  { id: 4, avatar: 'C', title: 'Conversation #4', platform: 'ChatGPT', views: 36, days: 88, related: 0 },
+  { id: 5, avatar: 'G', title: 'Conversation #5', platform: 'Grok',    views: 24, days: 85, related: 0 },
 ];
 
 function daysAgo(d?: PrimitiveDate): number {
@@ -63,6 +63,26 @@ function daysAgo(d?: PrimitiveDate): number {
   return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
 }
 
+function normPlatform(p?: string): string {
+  const s = (p ?? '').toLowerCase();
+  if (s.includes('grok')) return 'Grok';
+  if (s.includes('claude')) return 'Claude';
+  if (s.includes('gemini') || s.includes('bard')) return 'Gemini';
+  if (s.includes('meta')) return 'Meta';
+  if (s.includes('openai') || s.includes('chatgpt')) return 'ChatGPT';
+  return p ?? 'Grok'; // default to Grok for your use case
+}
+
+function platformBadgeClass(platform: string): string {
+  const p = platform.toLowerCase();
+  if (p === 'grok') return 'bg-black text-white hover:bg-black/90';
+  if (p === 'chatgpt') return 'bg-emerald-700 hover:bg-emerald-600';
+  if (p === 'claude') return 'bg-purple-700 hover:bg-purple-600';
+  if (p === 'gemini') return 'bg-blue-700 hover:bg-blue-600';
+  if (p === 'meta') return 'bg-indigo-700 hover:bg-indigo-600';
+  return 'bg-gray-700 hover:bg-gray-600';
+}
+
 function toCard(item: ConversationLike): CardData {
   const maybeId = item.id ?? item.conversationId ?? item._id ?? item.slug;
   const id: string | number =
@@ -70,20 +90,24 @@ function toCard(item: ConversationLike): CardData {
       ? maybeId
       : Math.random().toString(36).slice(2);
 
-  const usernameRaw = item.username ?? item.user?.name ?? item.title ?? item.name ?? 'user';
-  const username = String(usernameRaw ?? 'user');
+  // Always show "Conversation #<id>"
+  const title = `Conversation #${String(id)}`;
 
-  const platform = String(item.platform ?? item.model ?? 'ChatGPT');
+  // Prefer DB platform/model, but normalize and default to Grok for your flow
+  const platform = normPlatform(item.platform ?? item.model ?? 'Grok');
+
   const views = Number(item.views ?? item.viewCount ?? item.stats?.views ?? 0) || 0;
   const related = Number(item.related ?? item.relatedCount ?? item.stats?.related ?? 0) || 0;
   const created = item.createdAt ?? item.created_at ?? item.updatedAt;
-  const avatar = (username.charAt(0) || 'U').toUpperCase();
 
-  return { id, avatar, username, platform, views, days: daysAgo(created), related };
+  // Avatar = first letter of platform ("G" for Grok, etc.)
+  const avatar = (platform.charAt(0) || 'C').toUpperCase();
+
+  return { id, avatar, title, platform, views, days: daysAgo(created), related };
 }
 
 export default async function Home() {
-  // Try DB; if it fails (e.g., during build or no DB), fall back to mocks.
+  // Try DB; if it fails, fall back to mocks.
   let items: ConversationLike[] = [];
   try {
     const raw = await listRecentConversations(24);
@@ -117,11 +141,10 @@ export default async function Home() {
         <Card className="p-6 mb-8 shadow-sm border border-gray-200">
           <CardContent className="pt-6">
             <h1 className="text-3xl font-semibold mb-6 text-center">
-              Share, Discuss, Cite <span className="text-pink-500">ChatGPT</span> Conversations
+              Share, Discuss, Cite <span className="text-black">Grok</span> Conversations
             </h1>
             <p className="text-center mb-8">
-              Your reliable tool for citing Generative A.I. conversations. Easily save discussions with Gemini, ChatGPT,
-              Meta and Claude into a URL.
+              Save your Grok (and other AI) chats into clean shareable links.
             </p>
           </CardContent>
         </Card>
@@ -136,12 +159,14 @@ export default async function Home() {
                 <div className="flex items-start space-x-4">
                   <Avatar
                     className={`h-10 w-10 ${
-                      card.avatar === 'S' || card.avatar === 'L'
-                        ? 'bg-blue-600'
-                        : card.avatar === 'P' || card.avatar === 'U'
-                        ? 'bg-orange-600'
-                        : card.avatar === 'C' || card.avatar === 'J'
+                      card.avatar === 'G'
+                        ? 'bg-black'
+                        : card.avatar === 'C'
                         ? 'bg-purple-600'
+                        : card.avatar === 'M'
+                        ? 'bg-indigo-600'
+                        : card.avatar === 'E' // emerald for ChatGPT
+                        ? 'bg-emerald-700'
                         : 'bg-gray-600'
                     }`}
                   >
@@ -152,18 +177,10 @@ export default async function Home() {
                       href={`/c/${String(card.id)}`}
                       className="text-sm font-medium text-gray-800 leading-relaxed hover:underline"
                     >
-                      {card.username}
+                      {card.title}
                     </Link>
                     <div className="mt-1">
-                      <Badge
-                        className={
-                          card.platform === 'ChatGPT'
-                            ? 'bg-blue-800 hover:bg-blue-700'
-                            : 'bg-gray-700 hover:bg-gray-600'
-                        }
-                      >
-                        {card.platform}
-                      </Badge>
+                      <Badge className={platformBadgeClass(card.platform)}>{card.platform}</Badge>
                     </div>
                   </div>
                 </div>
