@@ -15,13 +15,21 @@ let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
 async function reallyInitialize() {
+  console.log("=== INIT DB + S3 (GET) ===");
   await dbClient.initialize();
+
   try {
-    const config = loadConfig();
-    s3Client.initialize(config.s3);
+    if (!(s3Client as any).isReady) {
+      const config = loadConfig();
+      s3Client.initialize(config.s3);
+      (s3Client as any).isReady = true;
+    }
   } catch (err) {
-    console.error("S3 init failed (GET):", err);
+    if (!(err instanceof Error && err.message.includes("already initialized"))) {
+      console.error("S3 init failed (GET):", err);
+    }
   }
+
   isInitialized = true;
 }
 
@@ -87,30 +95,25 @@ function normalizeRec(rec: RawRec) {
   };
 }
 
-export async function GET(request: NextRequest, context: unknown) {
+export async function GET(
+  request: NextRequest,
+  context: { params: { id: string } }
+) {
   try {
     await ensureInitialized();
 
-    // safely extract id
-    const params = (context as { params?: Record<string, string | string[]> })
-      ?.params;
-    const rawId = params?.id;
-    const id = Array.isArray(rawId) ? rawId[0] : rawId;
-
-    if (!id) {
-      return safeJson({ error: "Missing conversation id" }, 400, corsHeaders(request));
-    }
-
+    const id = context.params.id;
     const rec = await getConversationRecord(id);
+    if (!rec) {
+      return safeJson({ error: "Conversation not found" }, 404, corsHeaders(request));
+    }
 
     const raw = request.nextUrl.searchParams.get("raw");
     if (raw === "1" || raw === "true") {
       return safeJson(normalizeRec(rec as RawRec), 200, corsHeaders(request));
     }
 
-    const signedUrl = await s3Client.getSignedReadUrl(
-      (rec as RawRec).contentKey
-    );
+    const signedUrl = await s3Client.getSignedReadUrl((rec as RawRec).contentKey);
     return safeJson({ url: signedUrl }, 200, corsHeaders(request));
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";

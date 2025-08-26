@@ -17,12 +17,19 @@ let initPromise: Promise<void> | null = null;
 async function reallyInitialize(): Promise<void> {
   console.log("=== INIT DB + S3 (POST) ===");
   await dbClient.initialize();
+
   try {
-    const config = loadConfig();
-    s3Client.initialize(config.s3);
+    if (!(s3Client as any).isReady) {
+      const config = loadConfig();
+      s3Client.initialize(config.s3);
+      (s3Client as any).isReady = true;
+    }
   } catch (err) {
-    console.error("S3 init failed (POST):", err);
+    if (!(err instanceof Error && err.message.includes("already initialized"))) {
+      console.error("S3 init failed (POST):", err);
+    }
   }
+
   isInitialized = true;
 }
 
@@ -68,27 +75,29 @@ export async function POST(req: NextRequest) {
 
     const htmlText = await htmlFile.text();
 
-    // Unique S3 key (safe even if DB generates its own id)
+    // Unique S3 key
     const conversationKey = crypto.randomUUID();
 
     // Upload HTML to S3
     const key = await s3Client.storeConversation(conversationKey, htmlText);
 
-    // Save DB record (let DB generate `id`)
+    // Save DB record
     const saved = await createConversationRecord({
       model,
       contentKey: key,
       scrapedAt: new Date(),
-      sourceHtmlBytes: 0,
-      views: 0
+      sourceHtmlBytes: htmlText.length,
+      views: 0,
     });
 
-    const url = `/c/${saved.id}`;
-
-   return safeJson({
-  id: saved.id,
-  url: `https://jomniconvo.duckdns.org/c/${saved.id}`
-}, 200, corsHeaders(req));
+    return safeJson(
+      {
+        id: saved.id,
+        url: `https://jomniconvo.duckdns.org/c/${saved.id}`,
+      },
+      200,
+      corsHeaders(req)
+    );
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
     console.error("Error in POST /api/conversation:", msg);
