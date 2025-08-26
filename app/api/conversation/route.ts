@@ -9,17 +9,24 @@ import { dbClient } from "@/lib/db/client";
 import { s3Client } from "@/lib/storage/s3";
 import { createConversationRecord } from "@/lib/db/conversations";
 import { safeJson } from "@/app/helpers/safeJson";
+import { loadConfig } from "@/lib/config";
 
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
-async function reallyInitialize() {
+async function reallyInitialize(): Promise<void> {
   console.log("=== INIT DB + S3 (POST) ===");
   await dbClient.initialize();
+  try {
+    const config = loadConfig();
+    s3Client.initialize(config.s3);
+  } catch (err) {
+    console.error("S3 init failed (POST):", err);
+  }
   isInitialized = true;
 }
 
-async function ensureInitialized() {
+async function ensureInitialized(): Promise<void> {
   if (isInitialized) return;
   if (!initPromise) {
     initPromise = reallyInitialize().catch((err) => {
@@ -61,19 +68,19 @@ export async function POST(req: NextRequest) {
 
     const htmlText = await htmlFile.text();
 
-    // Generate unique ID for conversation
-    const conversationId = crypto.randomUUID();
+    // Unique S3 key (safe even if DB generates its own id)
+    const conversationKey = crypto.randomUUID();
 
-    // Upload to S3
-    const key = await s3Client.storeConversation(conversationId, htmlText);
+    // Upload HTML to S3
+    const key = await s3Client.storeConversation(conversationKey, htmlText);
 
-    // Save DB record (match CreateConversationInput type)
+    // Save DB record (let DB generate `id`)
     const saved = await createConversationRecord({
       model,
       contentKey: key,
       scrapedAt: new Date(),
-      sourceHtmlBytes: htmlText.length,
-      views: 0,
+      sourceHtmlBytes: 0,
+      views: 0
     });
 
     const url = `/c/${saved.id}`;
