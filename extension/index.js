@@ -54,19 +54,23 @@ async function scrape() {
 
 // helper: grab HTML of active tab
 async function getActiveTabHtml() {
+  if (!chrome?.tabs?.query) {
+    console.error("chrome.tabs.query is not available – extension context?");
+    return '';
+  }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return '';
+
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
-      console.error("No active tab found");
-      return "";
-    }
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => document.documentElement.innerHTML,
+      func: () => document.documentElement.innerHTML
     });
-    return result?.result || "";
-  } catch (e) {
-    console.error("Failed to scrape tab HTML:", e);
-    return "";
+    return result?.result || '';
+  } catch (err) {
+    console.error("Failed to scrape tab HTML:", err);
+    return '';
   }
 }
+
