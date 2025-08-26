@@ -14,30 +14,17 @@ import { loadConfig } from "@/lib/config";
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
-// Add a safe type wrapper for S3 client
-interface ExtendedS3Client {
-  isReady?: boolean;
-  initialize: (config: unknown) => void;
-  storeConversation: (id: string, html: string) => Promise<string>;
-}
-const s3ClientExt = s3Client as ExtendedS3Client;
-
 async function reallyInitialize(): Promise<void> {
   console.log("=== INIT DB + S3 (POST) ===");
   await dbClient.initialize();
-
-  try {
-    if (!s3ClientExt.isReady) {
+  if (!isInitialized) {
+    try {
       const config = loadConfig();
-      s3ClientExt.initialize(config.s3);
-      s3ClientExt.isReady = true;
-    }
-  } catch (err) {
-    if (!(err instanceof Error && err.message.includes("already initialized"))) {
+      s3Client.initialize(config.s3);
+    } catch (err) {
       console.error("S3 init failed (POST):", err);
     }
   }
-
   isInitialized = true;
 }
 
@@ -54,8 +41,7 @@ async function ensureInitialized(): Promise<void> {
 }
 
 function corsHeaders(req: NextRequest) {
-  const reqHeaders =
-    req.headers.get("access-control-request-headers") ?? "Content-Type";
+  const reqHeaders = req.headers.get("access-control-request-headers") ?? "Content-Type";
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -82,12 +68,14 @@ export async function POST(req: NextRequest) {
     }
 
     const htmlText = await htmlFile.text();
+
+    // Generate unique key for S3
     const conversationKey = crypto.randomUUID();
 
-    // Save to S3
-    const key = await s3ClientExt.storeConversation(conversationKey, htmlText);
+    // Upload HTML to S3
+    const key = await s3Client.storeConversation(conversationKey, htmlText);
 
-    // Save DB record
+    // Save DB record (let DB assign its own `id` string)
     const saved = await createConversationRecord({
       model,
       contentKey: key,
