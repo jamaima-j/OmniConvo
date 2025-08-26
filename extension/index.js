@@ -1,76 +1,23 @@
-// background.js (service worker or background script)
+// index.js (content script)
 
-let isRequesting = false;
-let model = "ChatGPT";
+console.log("TechX content script loaded");
 
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-  if (request.action === "scrape") scrape();
-  if (request.action === "model") model = request.model;
-  sendResponse({ success: true });
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== "SCRAPE_PAGE") return;
+
+  try {
+    const htmlDoc = document.documentElement.innerHTML;
+    const model = msg.model || "ChatGPT";
+
+    // Forward HTML + model to background
+    chrome.runtime.sendMessage(
+      { type: "SAVE_CONVO", payload: { htmlDoc, model } },
+      (res) => sendResponse(res)
+    );
+  } catch (e) {
+    console.error("Content script scrape error:", e);
+    sendResponse({ ok: false, error: String(e) });
+  }
+
+  return true; // async response
 });
-
-async function scrape() {
-  if (isRequesting) return;
-  const htmlDoc = await getActiveTabHtml();
-  if (!htmlDoc) return;
-
-  isRequesting = true;
-  const apiUrl = "https://jomniconvo.duckdns.org/api/conversation";
-
-  const body = new FormData();
-  body.append(
-    "htmlDoc",
-    new Blob([htmlDoc], { type: "text/plain; charset=utf-8" })
-  );
-  body.append("model", model);
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30_000);
-
-  try {
-    const res = await fetch(apiUrl, { method: "POST", body, signal: controller.signal });
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-
-    const origin = new URL(apiUrl).origin;
-    const dest =
-      typeof payload.url === "string" && payload.url
-        ? `${origin}${payload.url}`
-        : `${origin}/c/${payload.id}`;
-
-    if (chrome?.tabs?.create) {
-      chrome.tabs.create({ url: dest });
-    } else {
-      window.open(dest, "_blank", "noopener,noreferrer");
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("Error saving conversation:", msg);
-  } finally {
-    clearTimeout(timeoutId);
-    isRequesting = false;
-  }
-}
-
-// helper: grab HTML of active tab
-async function getActiveTabHtml() {
-  if (!chrome?.tabs?.query) {
-    console.error("chrome.tabs.query is not available – extension context?");
-    return '';
-  }
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) return '';
-
-  try {
-    const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => document.documentElement.innerHTML
-    });
-    return result?.result || '';
-  } catch (err) {
-    console.error("Failed to scrape tab HTML:", err);
-    return '';
-  }
-}
-

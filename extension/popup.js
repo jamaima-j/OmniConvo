@@ -1,11 +1,10 @@
-console.log('popup.js is loaded');
+console.log('popup.js loaded');
 
 var port = chrome.runtime.connect({ name: 'popupToBackground' });
 console.log('Port established:', port);
 
 function initApp() {
   document.getElementById('sharePublic').addEventListener('click', sharePublic);
-  console.log('initApp');
 }
 
 function sharePublic() {
