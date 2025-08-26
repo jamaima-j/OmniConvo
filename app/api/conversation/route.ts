@@ -14,15 +14,23 @@ import { loadConfig } from "@/lib/config";
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
+// Add a safe type wrapper for S3 client
+interface ExtendedS3Client {
+  isReady?: boolean;
+  initialize: (config: unknown) => void;
+  storeConversation: (id: string, html: string) => Promise<string>;
+}
+const s3ClientExt = s3Client as ExtendedS3Client;
+
 async function reallyInitialize(): Promise<void> {
   console.log("=== INIT DB + S3 (POST) ===");
   await dbClient.initialize();
 
   try {
-    if (!(s3Client as any).isReady) {
+    if (!s3ClientExt.isReady) {
       const config = loadConfig();
-      s3Client.initialize(config.s3);
-      (s3Client as any).isReady = true;
+      s3ClientExt.initialize(config.s3);
+      s3ClientExt.isReady = true;
     }
   } catch (err) {
     if (!(err instanceof Error && err.message.includes("already initialized"))) {
@@ -74,12 +82,10 @@ export async function POST(req: NextRequest) {
     }
 
     const htmlText = await htmlFile.text();
-
-    // Unique S3 key
     const conversationKey = crypto.randomUUID();
 
-    // Upload HTML to S3
-    const key = await s3Client.storeConversation(conversationKey, htmlText);
+    // Save to S3
+    const key = await s3ClientExt.storeConversation(conversationKey, htmlText);
 
     // Save DB record
     const saved = await createConversationRecord({
@@ -90,7 +96,6 @@ export async function POST(req: NextRequest) {
       views: 0,
     });
 
-    // Directly return full URL — no unused `url` variable
     return safeJson(
       {
         id: saved.id,

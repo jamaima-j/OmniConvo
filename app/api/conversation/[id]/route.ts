@@ -14,15 +14,23 @@ import { safeJson } from "@/app/helpers/safeJson";
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
+// Extend s3Client type so we can mark when it’s ready
+interface ExtendedS3Client {
+  isReady?: boolean;
+  initialize: (config: unknown) => void;
+  getSignedReadUrl: (key: string, expiresIn?: number) => Promise<string>;
+}
+const s3ClientExt = s3Client as ExtendedS3Client;
+
 async function reallyInitialize() {
   console.log("=== INIT DB + S3 (GET) ===");
   await dbClient.initialize();
 
   try {
-    if (!(s3Client as any).isReady) {
+    if (!s3ClientExt.isReady) {
       const config = loadConfig();
-      s3Client.initialize(config.s3);
-      (s3Client as any).isReady = true;
+      s3ClientExt.initialize(config.s3);
+      s3ClientExt.isReady = true;
     }
   } catch (err) {
     if (!(err instanceof Error && err.message.includes("already initialized"))) {
@@ -34,14 +42,7 @@ async function reallyInitialize() {
 }
 
 async function ensureInitialized() {
-  if (isInitialized) {
-    try {
-      dbClient.getPool();
-      return;
-    } catch {
-      isInitialized = false;
-    }
-  }
+  if (isInitialized) return;
   if (!initPromise) {
     initPromise = reallyInitialize().catch((e) => {
       initPromise = null;
@@ -50,7 +51,6 @@ async function ensureInitialized() {
     });
   }
   await initPromise;
-  dbClient.getPool();
 }
 
 function corsHeaders(req: NextRequest) {
@@ -70,28 +70,20 @@ export async function OPTIONS(req: NextRequest) {
 }
 
 type RawRec = {
-  id: string | number | bigint;
+  id: number;
   model: string;
   scrapedAt: string | Date;
   contentKey: string;
-  sourceHtmlBytes: string | number | bigint;
-  views: string | number | bigint;
+  sourceHtmlBytes: number;
+  views: number;
   createdAt: string | Date;
 };
 
 function normalizeRec(rec: RawRec) {
-  const n = (v: string | number | bigint): number =>
-    typeof v === "bigint"
-      ? Number(v)
-      : typeof v === "string"
-      ? Number(v)
-      : v;
-
   return {
     ...rec,
-    id: n(rec.id),
-    sourceHtmlBytes: n(rec.sourceHtmlBytes),
-    views: n(rec.views),
+    scrapedAt: new Date(rec.scrapedAt),
+    createdAt: new Date(rec.createdAt),
   };
 }
 
@@ -102,18 +94,19 @@ export async function GET(
   try {
     await ensureInitialized();
 
-    const id = context.params.id;
-    const rec = await getConversationRecord(id);
+    const idStr = context.params.id; // ✅ keep string for DB call
+    const rec = await getConversationRecord(idStr); // DB likely expects string
+
     if (!rec) {
-      return safeJson({ error: "Conversation not found" }, 404, corsHeaders(request));
+      return safeJson({ error: "Not found" }, 404, corsHeaders(request));
     }
 
     const raw = request.nextUrl.searchParams.get("raw");
     if (raw === "1" || raw === "true") {
-      return safeJson(normalizeRec(rec as RawRec), 200, corsHeaders(request));
+      return safeJson(normalizeRec(rec as unknown as RawRec), 200, corsHeaders(request));
     }
 
-    const signedUrl = await s3Client.getSignedReadUrl((rec as RawRec).contentKey);
+    const signedUrl = await s3ClientExt.getSignedReadUrl(rec.contentKey);
     return safeJson({ url: signedUrl }, 200, corsHeaders(request));
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
