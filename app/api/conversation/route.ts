@@ -85,7 +85,10 @@ export async function POST(req: NextRequest) {
 
     const url = `/c/${saved.id}`;
 
-    return safeJson({ id: saved.id, url }, 200, corsHeaders(req));
+   return safeJson({
+  id: saved.id,
+  url: `https://jomniconvo.duckdns.org/c/${saved.id}`
+}, 200, corsHeaders(req));
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
     console.error("Error in POST /api/conversation:", msg);
