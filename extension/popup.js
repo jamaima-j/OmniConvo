@@ -1,49 +1,45 @@
+// popup.js
 console.log("popup.js loaded");
 
-function initApp() {
-  document.getElementById("sharePublic").addEventListener("click", sharePublic);
-  console.log("TechX popup ready");
+function showBusy(isBusy) {
+  const btn = document.getElementById("sharePublic");
+  const loader = document.getElementById("sharePublicLoader");
+  if (!btn || !loader) return;
+  loader.style.display = isBusy ? "flex" : "none";
+  btn.style.display = isBusy ? "none" : "flex";
 }
 
 function sharePublic() {
-  console.log("SharePublic clicked");
-  document.querySelector("#sharePublicLoader").style.display = "flex";
-  document.querySelector("#sharePublic").style.display = "none";
+  showBusy(true);
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    chrome.tabs.sendMessage(tabs[0]?.id, { action: "scrape" }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error(chrome.runtime.lastError.message);
-        resetLoader();
-        return;
-      }
+    const tabId = tabs?.[0]?.id;
+    if (!tabId) {
+      console.error("No active tab");
+      showBusy(false);
+      return;
+    }
 
-      if (!response?.htmlDoc) {
-        console.error("No HTML returned from content script");
-        resetLoader();
-        return;
-      }
-
-      // Forward to background
-      chrome.runtime.sendMessage(
-        { type: "SAVE_CONVO", payload: { htmlDoc: response.htmlDoc, model: "ChatGPT" } },
-        (res) => {
-          if (res?.ok && res.url) {
-            console.log("Opening new tab:", res.url);
-            chrome.tabs.create({ url: res.url });
-          } else {
-            console.error("Error saving conversation:", res?.error);
-          }
-          resetLoader();
+    // Send BOTH fields so old/new listeners are happy
+    chrome.tabs.sendMessage(
+      tabId,
+      { type: "TECHX_SCRAPE", action: "scrape", model: "Grok" },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("sendMessage error:", chrome.runtime.lastError.message);
+          showBusy(false);
+          return;
         }
-      );
-    });
+        console.log("Content script ack:", response);
+
+        // We don't wait for the server; background will open the tab.
+        setTimeout(() => showBusy(false), 2000);
+      }
+    );
   });
 }
 
-function resetLoader() {
-  document.querySelector("#sharePublicLoader").style.display = "none";
-  document.querySelector("#sharePublic").style.display = "flex";
-}
-
-window.onload = initApp;
+window.addEventListener("load", () => {
+  const btn = document.getElementById("sharePublic");
+  if (btn) btn.addEventListener("click", sharePublic);
+});

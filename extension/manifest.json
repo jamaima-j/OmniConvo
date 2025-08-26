@@ -1,35 +1,44 @@
 {
   "name": "TechX",
-  "description": "This extension allows you to share your Claude, Gemini, Meta and ChatGPT conversations via URL.",
-  "version": "1.0.0",
+  "description": "Share Grok / Claude / Gemini / ChatGPT conversations via URL.",
+  "version": "1.0.1",
   "manifest_version": 3,
   "action": {
     "default_popup": "popup.html"
   },
-  "permissions": ["identity", "activeTab", "tabs", "webNavigation", "scripting"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
   "host_permissions": [
-    "https://*.google.com/*",
-    "https://meta.ai/*",
+    "https://grok.com/*",
+    "https://www.grok.com/*",
     "https://claude.ai/*",
     "https://gemini.google.com/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
-    "https://grok.com/*",
+    "https://meta.ai/*",
+    "https://*.google.com/*",
     "https://jomniconvo.duckdns.org/*"
   ],
-  "background": {
-    "service_worker": "background.js"
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; font-src 'self' data: https://fonts.gstatic.com https://use.typekit.net;"
   },
   "content_scripts": [
     {
       "matches": [
-        "https://chat.openai.com/*",
-        "https://chatgpt.com/*",
-        "https://bard.google.com/*",
-        "https://gemini.google.com/*",
+        "https://grok.com/*",
+        "https://www.grok.com/*",
         "https://claude.ai/*",
-        "https://www.meta.ai/*",
-        "https://grok.com/*"
+        "https://gemini.google.com/*",
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://meta.ai/*"
       ],
       "js": ["content.js"],
       "run_at": "document_end"
