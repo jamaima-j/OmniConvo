@@ -1,5 +1,4 @@
 // background.js (MV3 service worker)
-
 const API_URL = "https://jomniconvo.duckdns.org/api/conversation";
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -12,6 +11,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         throw new Error("Missing htmlDoc payload");
       }
 
+      console.log("POSTing to", API_URL, "model:", model, "bytes:", htmlDoc.length);
+
       const body = new FormData();
       body.append("htmlDoc", new Blob([htmlDoc], { type: "text/html; charset=utf-8" }));
       body.append("model", model);
@@ -20,6 +21,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const text = await res.text();
 
       if (!res.ok) {
+        console.error("Server error:", res.status, text.slice(0, 400));
         throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
       }
 
@@ -33,9 +35,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         (typeof data.url === "string" && data.url) ||
         `https://jomniconvo.duckdns.org/c/${data.id}`;
 
-      if (chrome.tabs?.create) {
-        await chrome.tabs.create({ url: finalUrl });
-      }
+      console.log("Opening saved conversation:", finalUrl);
+      if (chrome.tabs?.create) await chrome.tabs.create({ url: finalUrl });
 
       sendResponse({ ok: true, url: finalUrl });
     } catch (e) {
@@ -44,6 +45,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
   })();
 
-  // keep channel open for the async sendResponse
-  return true;
+  return true; // keep message port open
 });

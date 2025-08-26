@@ -1,9 +1,13 @@
 // content.js
-(function init() {
-  console.log("TechX content script ready");
+(() => {
+  try {
+    document.documentElement.setAttribute("data-techx", "1");
+    console.log("TechX content script ready (frame):", window.location.href);
+  } catch (e) {
+    console.warn("TechX: failed to mark document:", e);
+  }
 })();
 
-// Utility: strip unwanted nodes inside a cloned element
 function stripNoise(root) {
   const selectors = [
     "button",
@@ -21,17 +25,12 @@ function stripNoise(root) {
   return root;
 }
 
-// Extract latest Q and A from Grok
 function extractLatestGrokQA() {
-  // Prefer Grok’s last reply container if present, else scan document.
-  const scope =
-    document.querySelector("#last-reply-container") || document;
+  const scope = document.querySelector("#last-reply-container") || document;
 
-  // Latest assistant answer block
   const answers = scope.querySelectorAll(".response-content-markdown");
   const answerEl = answers.length ? answers[answers.length - 1] : null;
 
-  // Latest user question text
   const userTexts = scope.querySelectorAll(".message-bubble .whitespace-pre-wrap");
   const userEl = userTexts.length ? userTexts[userTexts.length - 1] : null;
 
@@ -47,16 +46,14 @@ function extractLatestGrokQA() {
   return { questionText, answerHTML };
 }
 
-// Build a clean, minimal HTML resembling Grok
 function buildHtmlDoc({ questionText, answerHTML }) {
   const safeQ = (questionText || "").trim();
   const safeA = (answerHTML || "").trim();
-
   const title = safeQ ? `Grok: ${safeQ.slice(0, 80)}` : "Grok Conversation";
 
   const css = `
     :root { color-scheme: light dark; }
-    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background: #0b0c10; color: #e6e6e6; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background: #0b0c10; color: #e6e6e6; }
     .wrap { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
     .top { display:flex; align-items:center; gap:8px; padding:8px 0 20px; color:#9ca3af; font-size:12px; letter-spacing:.04em; text-transform:uppercase }
     .pill { border:1px solid #374151; padding:4px 10px; border-radius:999px; background:#0f1115; }
@@ -64,14 +61,11 @@ function buildHtmlDoc({ questionText, answerHTML }) {
     .me { background: #0f1115; color:#e5e7eb; max-width: 80%; margin-left:auto; border-bottom-right-radius: 6px; }
     .bot { background: #0b0c10; color:#e5e7eb; max-width: 100%; border-left: 2px solid #7c3aed; }
     .markdown :is(p,li) { line-height: 1.6; }
-    pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace; }
     pre { background:#0f1115; border:1px solid #1f2937; border-radius:12px; padding:12px; overflow:auto; }
     code:not(pre code) { background:#0f1115; border:1px solid #1f2937; border-radius:6px; padding:2px 6px; }
     a { color:#93c5fd; }
-    h1,h2,h3 { margin: 14px 0 6px; }
   `;
 
-  // Only include one user bubble and one assistant bubble.
   return `<!doctype html>
 <html>
 <head>
@@ -82,38 +76,29 @@ function buildHtmlDoc({ questionText, answerHTML }) {
 </head>
 <body>
   <div class="wrap">
-    <div class="top">
-      <span class="pill">Grok</span>
-    </div>
-
+    <div class="top"><span class="pill">Grok</span></div>
     ${safeQ ? `<div class="bubble me"><div class="markdown">${safeQ.replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>")}</div></div>` : ""}
-
     ${safeA ? `<div class="bubble bot"><div class="markdown">${safeA}</div></div>` : ""}
   </div>
 </body>
 </html>`;
 }
 
-// Listen for popup request
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  const wantsScrape =
-    msg?.type === "TECHX_SCRAPE" || msg?.action === "scrape";
+  const wantsScrape = msg?.type === "TECHX_SCRAPE" || msg?.action === "scrape";
   if (!wantsScrape) return;
 
-  // Acknowledge immediately to avoid “port closed” races
+  // Immediate ack
   sendResponse({ ok: true, acknowledged: true });
 
   try {
-    // Default to Grok if not specified
     const model = typeof msg?.model === "string" ? msg.model : "Grok";
-
     const { questionText, answerHTML } = extractLatestGrokQA();
     const htmlDoc = buildHtmlDoc({ questionText, answerHTML });
 
     chrome.runtime.sendMessage(
       { type: "SAVE_CONVO", payload: { htmlDoc, model } },
       (resp) => {
-        // background handles opening the tab; just log here
         if (chrome.runtime.lastError) {
           console.error("Background message error:", chrome.runtime.lastError.message);
           return;

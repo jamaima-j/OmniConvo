@@ -1,39 +1,44 @@
 {
   "name": "TechX",
   "description": "Share Grok / Claude / Gemini / ChatGPT conversations via URL.",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "manifest_version": 3,
-  "action": {
-    "default_popup": "popup.html"
-  },
+
+  "action": { "default_popup": "popup.html" },
+
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": [
-    "activeTab",
-    "tabs",
-    "scripting"
-  ],
+
+  "permissions": ["activeTab", "tabs", "scripting"],
+
   "host_permissions": [
     "https://grok.com/*",
     "https://www.grok.com/*",
+    "https://x.ai/*",
+    "https://www.x.ai/*",
     "https://claude.ai/*",
     "https://gemini.google.com/*",
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://meta.ai/*",
     "https://*.google.com/*",
-    "https://jomniconvo.duckdns.org/*"
+    "https://jomniconvo.duckdns.org/*",
+    "https://*/*"
   ],
+
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; font-src 'self' data: https://fonts.gstatic.com https://use.typekit.net;"
   },
+
   "content_scripts": [
     {
       "matches": [
         "https://grok.com/*",
         "https://www.grok.com/*",
+        "https://x.ai/*",
+        "https://www.x.ai/*",
         "https://claude.ai/*",
         "https://gemini.google.com/*",
         "https://chatgpt.com/*",
@@ -41,7 +46,9 @@
         "https://meta.ai/*"
       ],
       "js": ["content.js"],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ]
 }
