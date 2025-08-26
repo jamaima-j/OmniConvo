@@ -1,12 +1,17 @@
-// ========================================
 // app/c/[id]/page.tsx
-// ========================================
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+// Next.js wants a generic PageProps type
+interface PageProps {
+  params: {
+    id: string;
+  };
+}
 
 function toLocalString(d: Date | string | undefined): string {
   if (!d) return "";
@@ -14,20 +19,17 @@ function toLocalString(d: Date | string | undefined): string {
   return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleString();
 }
 
-export default async function ConversationPage({
-  params,
-}: {
-  params: { id: string };
-}) {
+export default async function ConversationPage({ params }: PageProps) {
   const id = params.id;
 
-  // fetch metadata via API
   const metaRes = await fetch(
     `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}?raw=1`,
     { cache: "no-store" }
   );
+
   if (metaRes.status === 404) return notFound();
   if (!metaRes.ok) return notFound();
+
   const rec = (await metaRes.json()) as {
     id: string;
     model: string;
@@ -38,7 +40,6 @@ export default async function ConversationPage({
     views: number;
   };
 
-  // fetch signed URL for the HTML
   const urlRes = await fetch(
     `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}`,
     { cache: "no-store" }
