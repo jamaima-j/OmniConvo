@@ -8,33 +8,37 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 
-type RouteParams = { id: string };
+function toLocalString(d: Date | string | undefined): string {
+  if (!d) return "";
+  const dt = typeof d === "string" ? new Date(d) : d;
+  return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleString();
+}
 
 export default async function ConversationPage({
   params,
 }: {
-  params: RouteParams;
+  params: { id: string };
 }) {
   const id = params.id;
 
-  // Fetch metadata (DB row)
+  // fetch metadata via API
   const metaRes = await fetch(
     `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}?raw=1`,
     { cache: "no-store" }
   );
   if (metaRes.status === 404) return notFound();
   if (!metaRes.ok) return notFound();
-
   const rec = (await metaRes.json()) as {
-    id: number;
+    id: string;
     model: string;
     scrapedAt: string;
+    sourceHtmlBytes: number;
     contentKey: string;
     createdAt: string;
     views: number;
   };
 
-  // Fetch signed URL for iframe
+  // fetch signed URL for the HTML
   const urlRes = await fetch(
     `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}`,
     { cache: "no-store" }
@@ -60,9 +64,22 @@ export default async function ConversationPage({
             </a>
           </div>
 
-          <h1 className="text-2xl font-bold">
-            Conversation #{rec.id} <span className="text-gray-500">({rec.model})</span>
-          </h1>
+          <h1 className="text-2xl font-bold">Conversation #{rec.id}</h1>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+            <p>
+              <strong>Model:</strong> {rec.model}
+            </p>
+            <p>
+              <strong>Scraped:</strong> {toLocalString(rec.scrapedAt)}
+            </p>
+            <p>
+              <strong>Size:</strong> {rec.sourceHtmlBytes} bytes
+            </p>
+            <p>
+              <strong>Content key:</strong> {rec.contentKey}
+            </p>
+          </div>
 
           <iframe
             src={url}
