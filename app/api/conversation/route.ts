@@ -90,6 +90,7 @@ export async function POST(req: NextRequest) {
       views: 0,
     });
 
+    // Directly return full URL — no unused `url` variable
     return safeJson(
       {
         id: saved.id,
