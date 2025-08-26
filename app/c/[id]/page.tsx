@@ -1,17 +1,16 @@
 // app/c/[id]/page.tsx
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-// Next.js wants a generic PageProps type
-interface PageProps {
+type Props = {
   params: {
     id: string;
   };
-}
+};
 
 function toLocalString(d: Date | string | undefined): string {
   if (!d) return "";
@@ -19,9 +18,10 @@ function toLocalString(d: Date | string | undefined): string {
   return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleString();
 }
 
-export default async function ConversationPage({ params }: PageProps) {
+export default async function ConversationPage({ params }: Props) {
   const id = params.id;
 
+  // fetch metadata
   const metaRes = await fetch(
     `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}?raw=1`,
     { cache: "no-store" }
@@ -31,7 +31,7 @@ export default async function ConversationPage({ params }: PageProps) {
   if (!metaRes.ok) return notFound();
 
   const rec = (await metaRes.json()) as {
-    id: string;
+    id: number;
     model: string;
     scrapedAt: string;
     sourceHtmlBytes: number;
@@ -40,10 +40,12 @@ export default async function ConversationPage({ params }: PageProps) {
     views: number;
   };
 
+  // fetch signed URL for the HTML
   const urlRes = await fetch(
     `${process.env.NEXT_PUBLIC_BASE_URL}/api/conversation/${id}`,
     { cache: "no-store" }
   );
+
   if (!urlRes.ok) return notFound();
   const { url } = (await urlRes.json()) as { url: string };
 
@@ -82,10 +84,10 @@ export default async function ConversationPage({ params }: PageProps) {
             </p>
           </div>
 
-          <iframe
-            src={url}
-            className="w-full h-[80vh] border rounded"
-            title={`conversation-${rec.id}`}
+          {/* Render the conversation HTML inline instead of iframe */}
+          <div
+            className="prose dark:prose-invert max-w-none border rounded-lg p-4 bg-white"
+            dangerouslySetInnerHTML={{ __html: await fetch(url).then((r) => r.text()) }}
           />
         </CardContent>
       </Card>
