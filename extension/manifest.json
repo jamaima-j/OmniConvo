@@ -1,16 +1,16 @@
 {
   "name": "TechX",
-  "description": "This extension allows you to share your Claude, Gemini, Meta and ChatGPT conversations via URL.",
+  "description": "This extension allows you to share Claude, Gemini, Meta and ChatGPT conversations via URL.",
   "version": "1.0.0",
   "manifest_version": 3,
-  "permissions": ["identity", "activeTab", "tabs", "scripting"],
+  "permissions": ["activeTab", "tabs", "scripting"],
   "host_permissions": [
-    "https://*.google.com/*",
-    "https://meta.ai/*",
-    "https://claude.ai/*",
-    "https://gemini.google.com/*",
-    "https://chatgpt.com/*",
     "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*",
+    "https://bard.google.com/*",
+    "https://claude.ai/*",
+    "https://www.meta.ai/*",
     "https://grok.com/*",
     "https://jomniconvo.duckdns.org/*"
   ],
@@ -18,8 +18,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "Save Conversation"
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
@@ -32,7 +31,7 @@
         "https://www.meta.ai/*",
         "https://grok.com/*"
       ],
-      "js": ["index.js"],
+      "js": ["content.js"],
       "run_at": "document_end"
     }
   ]

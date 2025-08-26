@@ -1,5 +1,3 @@
-// background.js (service worker)
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== "SAVE_CONVO") return;
 
@@ -17,25 +15,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
 
       const text = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0,200)}`);
-
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) {
-        throw new Error(`Expected JSON, got ${ct}: ${text.slice(0,200)}`);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
 
       const { url, id } = JSON.parse(text);
-
-      // Open new tab with saved conversation
       const dest = url || `https://jomniconvo.duckdns.org/c/${id}`;
-      chrome.tabs.create({ url: dest });
 
+      chrome.tabs.create({ url: dest });
       sendResponse({ ok: true, url: dest });
     } catch (e) {
-      console.error("Background SAVE_CONVO error:", e);
+      console.error("Background error:", e);
       sendResponse({ ok: false, error: String(e) });
     }
   })();
 
-  return true; // keep channel open for async sendResponse
+  return true; // keeps channel open for async
 });
