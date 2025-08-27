@@ -1,58 +1,60 @@
-// background.js
+// background.js (type: "module")
+const API_BASE = "https://jomniconvo.duckdns.org";
 
-let lastHash = null;
-let lastAt = 0;
-let lastUrl = null;
+// small helper: retry on transient network/5xx (incl. 504)
+async function postWithRetry(formData, attempts = 3, timeoutMs = 20000) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), timeoutMs);
 
-function hashHead(s) {
-  // djb2 xor hash for first 4KB
-  let h = 5381;
-  const n = Math.min(s.length, 4096);
-  for (let i = 0; i < n; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
-  return (h >>> 0).toString(16);
+      const res = await fetch(`${API_BASE}/api/conversation`, {
+        method: "POST",
+        body: formData, // let browser set multipart boundary
+        cache: "no-store",
+        credentials: "omit",
+        signal: controller.signal,
+      });
+
+      clearTimeout(t);
+
+      if (res.ok) return res.json();
+
+      // retry on 502/503/504 or other 5xx
+      if (res.status >= 500) {
+        lastErr = new Error(`${res.status} ${res.statusText}`);
+      } else {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`Server responded ${res.status} ${res.statusText}: ${txt}`);
+      }
+    } catch (e) {
+      lastErr = e;
+      // if aborted or network failed, backoff and retry
+    }
+    // simple backoff
+    await new Promise(r => setTimeout(r, 800 * (i + 1)));
+  }
+  throw lastErr || new Error("Upload failed");
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== "SAVE_CONVO") return;
-
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
-      const { htmlDoc, model } = msg.payload || {};
-      const hash = hashHead(htmlDoc || "");
-      const now = Date.now();
+      if (msg?.type !== "TECHX_UPLOAD") return;
 
-      // If we just saved identical content, don't POST again.
-      if (lastHash === hash && now - lastAt < 8000 && lastUrl) {
-        sendResponse({ ok: true, url: lastUrl, dedup: true });
-        return;
-      }
+      const fd = new FormData();
+      fd.append("html", msg.html || "");
+      fd.append("model", msg.model || "Grok");
+      fd.append("sourceUrl", msg.sourceUrl || "");
 
-      const body = new FormData();
-      body.append("htmlDoc", new Blob([htmlDoc || ""], { type: "text/html; charset=utf-8" }));
-      body.append("model", model || "Grok");
-
-      const res = await fetch("https://jomniconvo.duckdns.org/api/conversation", {
-        method: "POST",
-        body
-      });
-      const text = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-
-      const parsed = JSON.parse(text);
-      const finalUrl = parsed.url || `https://jomniconvo.duckdns.org/c/${parsed.id}`;
-
-      // remember for dedupe
-      lastHash = hash;
-      lastAt = now;
-      lastUrl = finalUrl;
-
-      if (chrome.tabs?.create) chrome.tabs.create({ url: finalUrl });
-      sendResponse({ ok: true, url: finalUrl });
-    } catch (e) {
-      console.error("Error saving conversation:", e);
-      sendResponse({ ok: false, error: String(e) });
+      const data = await postWithRetry(fd);
+      sendResponse({ ok: true, url: data?.url });
+    } catch (err) {
+      console.error("TECHX_UPLOAD error:", err);
+      sendResponse({ ok: false, error: String(err?.message || err) });
     }
   })();
 
-  return true; // keep message channel for async sendResponse
+  return true; // keep the message channel open
 });
