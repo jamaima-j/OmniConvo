@@ -1,11 +1,6 @@
-// content.js (style-only update)
-// NOTE: Keep your manifest.json and popup.js as-is.
-// This file keeps the same "listen → scrape → build HTML → POST → reply" flow,
-// and only swaps the HTML/CSS wrapper so saved pages look like Grok-lite,
-// forced light theme, nice bubbles, and clean code blocks.
-
+// content.js (style-only update + correct FormData POST + top-frame guard)
 (() => {
-  const API_BASE = "https://jomniconvo.duckdns.org"; // same server you already use
+  const API_BASE = "https://jomniconvo.duckdns.org";
 
   // Debug so you can see which frame is active
   try {
@@ -13,7 +8,6 @@
   } catch {}
 
   // ---- Helpers -------------------------------------------------------------
-
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -186,7 +180,6 @@ html, body {
   }
 
   // Keep your scraping shape: locate the chat container and grab its HTML.
-  // (No logic change to what you were doing—this is just a safe default.)
   function collectConversationHtml() {
     // Prefer Grok container you showed; otherwise fall back.
     let node =
@@ -199,20 +192,18 @@ html, body {
     return node ? node.outerHTML : "<div>No conversation found</div>";
   }
 
-  // Keep the POST flow you already had — send rendered HTML to your server.
+  // Correct FormData POST (server expects req.formData())
   async function saveConversation(htmlDoc, model) {
-    const payload = {
-      html: htmlDoc,
-      model: model || "Grok",
-      sourceUrl: location.href
-    };
+    const fd = new FormData();
+    fd.append("html", htmlDoc || "");
+    fd.append("model", model || "Grok");
+    fd.append("sourceUrl", location.href);
 
     const res = await fetch(`${API_BASE}/api/conversation`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      credentials: "omit",
+      body: fd,            // IMPORTANT: no manual Content-Type header
       cache: "no-store",
+      credentials: "omit",
     });
 
     if (!res.ok) {
@@ -222,18 +213,26 @@ html, body {
     return res.json(); // expected { ok: true, url: "..." }
   }
 
-  // ---- Message listener (kept as before: supports both fields) -------------
+  // ---- Message listener (top-frame only to avoid double saves) -------------
+  let __techxBusy = false;
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // Only the top frame should handle messages
+    if (window !== window.top) return; // other frames ignore
+
     try {
       const isScrape =
         (msg && msg.type === "TECHX_SCRAPE") ||
         (msg && msg.action === "scrape");
+      if (!isScrape) return;
 
-      if (!isScrape) return; // ignore other messages
+      if (__techxBusy) {
+        sendResponse({ ok: false, error: "Busy" });
+        return;
+      }
+      __techxBusy = true;
 
       const model = (msg && msg.model) || "Grok";
-
       const innerHtml = collectConversationHtml();
       const htmlDoc = buildHtmlDoc(innerHtml, {
         model,
@@ -244,18 +243,20 @@ html, body {
       saveConversation(htmlDoc, model)
         .then((data) => {
           try { console.log("SAVE_CONVO response:", data); } catch {}
+          __techxBusy = false;
           sendResponse({ ok: true, url: data?.url });
         })
         .catch((err) => {
           console.error("SAVE_CONVO error:", err);
+          __techxBusy = false;
           sendResponse({ ok: false, error: String(err && err.message || err) });
         });
 
       return true; // keep the port open for async response
     } catch (err) {
       console.error("content.js fatal:", err);
+      __techxBusy = false;
       sendResponse({ ok: false, error: String(err && err.message || err) });
-      // not async in this branch
     }
   });
 })();
