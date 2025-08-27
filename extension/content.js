@@ -1,7 +1,6 @@
-// content.js — inject skin + sanitize + chunked upload via background
-// Flow: popup -> content (collect/sanitize) -> background (wrap + upload) -> background opens tab
+// content.js — scrape ONLY Q&A, rebuild minimal conversation with your bubble CSS, chunked upload via background
 
-// ========== 1) Conversation CSS skin (injected once) ==========
+// ===================== 1) Inject the bubble skin once =====================
 (() => {
   const STYLE_ID = 'techx-conversation-css';
   const CSS = `
@@ -62,76 +61,134 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
-  function waitForContainerAndInject() {
-    if (document.querySelector('#last-reply-container')) { inject(); return; }
-    const mo = new MutationObserver(() => {
-      if (document.querySelector('#last-reply-container')) { inject(); mo.disconnect(); }
-    });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-  }
-
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', waitForContainerAndInject);
+    document.addEventListener('DOMContentLoaded', inject);
   } else {
-    waitForContainerAndInject();
+    inject();
   }
 })();
 
-// ========== 2) Collect + sanitize + chunked upload to background ==========
+// ===================== 2) Build a MINIMAL Q&A-only HTML =====================
 (() => {
-  const CHUNK_SIZE = 128 * 1024; // 128KB per message (string length)
+  const CHUNK_SIZE = 128 * 1024;
 
-  function log(...args){ try{ console.log('[TechX content]', ...args); }catch{} }
+  function log(...a){ try{ console.log('[TechX content]', ...a); }catch{} }
 
-  // Remove heavy/interactive bits; keep semantic text & classes
-  function sanitizeNodeForSave(node) {
-    const clone = node.cloneNode(true);
-
-    // strip interactive UI
-    clone.querySelectorAll(
-      ".action-buttons,.inline-media-container,.auth-notification," +
-      "[aria-label='Copy'],[aria-label='Edit'],[aria-label='Regenerate']," +
-      "[aria-label='Create share link'],[aria-label='Like'],[aria-label='Dislike']," +
-      "[aria-label='More actions'],.citation"
-    ).forEach(el => el.remove());
-
-    // remove inline styles (we’ll re-skin later)
-    clone.querySelectorAll("[style]").forEach(el => el.removeAttribute("style"));
-
-    // remove base64 images and inline SVGs
-    clone.querySelectorAll("img[src^='data:']").forEach(el => el.remove());
-    clone.querySelectorAll("svg").forEach(el => el.remove());
-
-    // remove giant data-/aria- attributes
-    clone.querySelectorAll("*").forEach(el => {
-      for (const a of [...el.attributes]) {
-        const n = a.name;
-        if (n.startsWith("data-") || n.startsWith("aria-")) el.removeAttribute(n);
-      }
+  // --- Sanitizers ---
+  function stripDangerousAndAttrs(root) {
+    root.querySelectorAll('script,style,link,iframe,object,embed,svg,button').forEach(n => n.remove());
+    root.querySelectorAll('*').forEach(el => {
+      // remove inline styles and event handlers
+      [...el.attributes].forEach(attr => {
+        const n = attr.name.toLowerCase();
+        if (n === 'style' || n.startsWith('on') || n.startsWith('data-') || n.startsWith('aria-')) {
+          el.removeAttribute(attr.name);
+        }
+      });
     });
-
-    return clone.outerHTML;
+    return root;
   }
 
-  function collectConversationHtml() {
-    const node =
-      document.getElementById("last-reply-container") ||
-      document.querySelector("#last-reply-container") ||
+  function sanitizeAssistantHTML(sourceEl) {
+    const clone = sourceEl.cloneNode(true);
+    stripDangerousAndAttrs(clone);
+    return clone.innerHTML;
+  }
+
+  function sanitizeUserText(el) {
+    const txt = (el.innerText || el.textContent || '').replace(/\u00A0/g, ' ').trim();
+    return txt;
+  }
+
+  // --- Collect messages in chronological order ---
+  // Heuristics for Grok-like pages:
+  // - USER:    .items-end .message-bubble  (right bubble)
+  // - ASSIST:  .items-start .response-content-markdown (answer area)
+  function collectMessages() {
+    const root =
+      document.getElementById('last-reply-container') ||
+      document.querySelector('#last-reply-container') ||
       document.querySelector('[data-testid="messages"]') ||
-      document.querySelector("main") ||
-      document.body;
+      document.querySelector('main') || document.body;
 
-    return node ? sanitizeNodeForSave(node) : "<div>No conversation found</div>";
+    if (!root) return [];
+
+    const messages = [];
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      {
+        acceptNode(node) {
+          try {
+            if (!(node instanceof Element)) return NodeFilter.FILTER_SKIP;
+            if (node.matches('.items-end .message-bubble')) return NodeFilter.FILTER_ACCEPT;        // user
+            if (node.matches('.items-start .response-content-markdown')) return NodeFilter.FILTER_ACCEPT; // assistant
+            return NodeFilter.FILTER_SKIP;
+          } catch { return NodeFilter.FILTER_SKIP; }
+        }
+      }
+    );
+
+    let n;
+    while ((n = walker.nextNode())) {
+      if (n.matches('.items-end .message-bubble')) {
+        messages.push({ role: 'user', text: sanitizeUserText(n) });
+      } else {
+        messages.push({ role: 'assistant', html: sanitizeAssistantHTML(n) });
+      }
+    }
+
+    // Filter empties
+    return messages.filter(m => (m.role === 'user' ? m.text : m.html)?.length);
   }
 
+  // --- Rebuild conversation with JUST bubbles inside the minimal container ---
+  function buildMinimalConversationHTML(messages) {
+    const start = `<div class="flex w-full flex-col" id="last-reply-container" style="--gutter-width: calc((100cqw - var(--content-width)) / 2);">`;
+    const end   = `</div>`;
+    const parts = [start];
+
+    for (const m of messages) {
+      if (m.role === 'user') {
+        parts.push(
+`<div class="flex flex-col items-center">
+  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-0.5 items-end">
+    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose dark:prose-invert break-words prose-p:opacity-100 prose-strong:opacity-100 prose-li:opacity-100 prose-ul:opacity-100 prose-ol:opacity-100 prose-ul:my-1 prose-ol:my-1 prose-li:my-2 last:prose-li:mb-3 prose-li:ps-1 prose-li:ms-1 bg-surface-l2 border border-border-l1 max-w-[100%] sm:max-w-[90%] px-4 py-2.5 rounded-br-lg">
+      <span class="whitespace-pre-wrap">${escapeHtml(m.text)}</span>
+      <section class="inline-media-container flex flex-col gap-1"></section>
+      <section class="auth-notification flex flex-col gap-1"></section>
+    </div>
+  </div>
+</div>`
+        );
+      } else {
+        parts.push(
+`<div class="flex flex-col items-center">
+  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-0.5 items-start">
+    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose dark:prose-invert break-words prose-p:opacity-100 prose-strong:opacity-100 prose-li:opacity-100 prose-ul:opacity-100 prose-ol:opacity-100 prose-ul:my-1 prose-ol:my-1 prose-li:my-2 last:prose-li:mb-3 prose-li:ps-1 prose-li:ms-1 w-full max-w-none">
+      <div class="response-content-markdown markdown">${m.html}</div>
+    </div>
+  </div>
+</div>`
+        );
+      }
+    }
+
+    parts.push(end);
+    return parts.join('\n');
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // --- Send to background in chunks ---
   function sendMessagePromise(payload) {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage(payload, (resp) => {
-        if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
-        } else {
-          resolve(resp);
-        }
+        if (chrome.runtime.lastError) resolve({ ok:false, error: chrome.runtime.lastError.message });
+        else resolve(resp);
       });
     });
   }
@@ -139,7 +196,6 @@
   async function uploadInChunks(innerHtml, meta) {
     const uploadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    // INIT
     const init = await sendMessagePromise({
       type: "TECHX_UPLOAD_INIT",
       uploadId,
@@ -152,73 +208,62 @@
     });
     if (!init?.ok) return init;
 
-    // CHUNKS (fire-and-forget; background reassembles by index)
     const total = Math.ceil(innerHtml.length / CHUNK_SIZE);
     for (let i = 0; i < total; i++) {
       const start = i * CHUNK_SIZE;
-      const end = start + CHUNK_SIZE;
       chrome.runtime.sendMessage({
         type: "TECHX_UPLOAD_CHUNK",
         uploadId,
         index: i,
         total,
-        chunk: innerHtml.slice(start, end)
+        chunk: innerHtml.slice(start, start + CHUNK_SIZE)
       });
     }
 
-    // COMMIT (background will wrap + upload + open tab)
     return await sendMessagePromise({
       type: "TECHX_UPLOAD_COMMIT",
       uploadId,
-      openTab: true // background opens exactly one tab on success
+      openTab: true
     });
   }
 
-  // ========== 3) Message entrypoint from popup ==========
+  // ===================== 3) Entry point from popup =====================
   let busy = false;
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    // top-frame only
-    if (window !== window.top) return;
+    if (window !== window.top) return; // top frame only
 
     const isScrape = msg && (msg.type === "TECHX_SCRAPE" || msg.action === "scrape");
     if (!isScrape) return;
 
-    if (busy) {
-      sendResponse({ ok: false, error: "Busy" });
-      return; // sync path
-    }
-    busy = true;
+    if (busy) { sendResponse({ ok:false, error:"Busy" }); return; }
 
+    busy = true;
     (async () => {
       try {
         const model = (msg && msg.model) || "Grok";
-        const innerHtml = collectConversationHtml();
+        const messages = collectMessages();
 
-        log('Collected conversation HTML length:', innerHtml.length);
+        log('Found messages:', messages.length);
 
-        const resp = await uploadInChunks(innerHtml, {
+        const minimalHtml = buildMinimalConversationHTML(messages.length ? messages : []);
+        const resp = await uploadInChunks(minimalHtml, {
           model,
           source: "Grok",
           title: document.title || "Saved Conversation"
         });
 
         busy = false;
-
-        if (resp?.ok) {
-          // background already opened the URL if openTab:true
-          sendResponse({ ok: true, url: resp.url || null });
-        } else {
-          sendResponse({ ok: false, error: resp?.error || "Unknown error" });
-        }
-      } catch (err) {
+        if (resp?.ok) sendResponse({ ok:true, url: resp.url || null });
+        else sendResponse({ ok:false, error: resp?.error || "Upload failed" });
+      } catch (e) {
         busy = false;
-        sendResponse({ ok: false, error: String(err?.message || err) });
+        sendResponse({ ok:false, error: String(e?.message || e) });
       }
     })();
 
-    return true; // keep channel open while we async work
+    return true; // keep channel open
   });
 
-  log('TechX content script ready:', location.href);
+  log('TechX content script ready (Q&A only):', location.href);
 })();
