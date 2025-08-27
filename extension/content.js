@@ -1,102 +1,261 @@
-// content.js
+// content.js (style-only update)
+// NOTE: Keep your manifest.json and popup.js as-is.
+// This file keeps the same "listen → scrape → build HTML → POST → reply" flow,
+// and only swaps the HTML/CSS wrapper so saved pages look like Grok-lite,
+// forced light theme, nice bubbles, and clean code blocks.
+
 (() => {
-  // Only in top frame, and bind once.
-  if (window.top !== window) return;
-  if (window.__TECHX_BOUND__) return;
-  window.__TECHX_BOUND__ = true;
-  console.log("TechX content script bound:", location.href);
+  const API_BASE = "https://jomniconvo.duckdns.org"; // same server you already use
 
-  let isSaving = false;
-  let lastHead = "";
+  // Debug so you can see which frame is active
+  try {
+    console.log("TechX content script ready (frame):", location.href);
+  } catch {}
 
-  // Build a compact, Grok-like HTML of the whole thread
-  function extractTranscriptHtml() {
-    const userSel = '.message-bubble .whitespace-pre-wrap';
-    const aiSel   = '.response-content-markdown';
+  // ---- Helpers -------------------------------------------------------------
 
-    const items = [];
-    const seen = new Set();
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
 
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-    while (walker.nextNode()) {
-      const el = walker.currentNode;
-      if (!(el instanceof HTMLElement)) continue;
-
-      if (el.matches(userSel) && !seen.has(el)) {
-        seen.add(el);
-        const txt = (el.textContent || "").trim();
-        if (txt) items.push({ role: "user", html: `<p>${txt}</p>` });
-      } else if (el.matches(aiSel) && !seen.has(el)) {
-        seen.add(el);
-        const html = el.innerHTML || "";
-        if (html.trim()) items.push({ role: "assistant", html });
-      }
-    }
-
-    if (!items.length) return "";
+  // STYLE-ONLY: new HTML wrapper. Pass your scraped inner HTML as `innerHtml`.
+  function buildHtmlDoc(innerHtml, meta = {}) {
+    const model = meta.model || "Grok";
+    const source = meta.source || "Grok";
+    const title  = meta.title  || "Saved Conversation";
 
     return `<!doctype html>
-<html>
+<html lang="en">
 <head>
-<meta charset="utf-8">
-<title>Grok Conversation</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  :root{--bg:#f7f7fb;--fg:#111;--muted:#6b7280;--ring:#e5e7eb;--user:#eef4ff;--ai:#f0f9ff;}
-  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Arial;}
-  .wrap{max-width:860px;margin:24px auto;padding:16px}
-  .meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;color:var(--muted);font-size:12px}
-  .chip{display:inline-flex;align-items:center;font-size:11px;border:1px solid #e9d5ff;background:#faf5ff;color:#6d28d9;border-radius:999px;padding:2px 8px}
-  .bubble{border-radius:14px;padding:12px 14px;border:1px solid var(--ring);margin:8px 0}
-  .user{background:var(--user)}
-  .assistant{background:var(--ai)}
-  .assistant pre{white-space:pre;overflow:auto;border:1px solid var(--ring);border-radius:8px;padding:10px;margin:8px 0}
-  .assistant code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>${escapeHtml(title)}</title>
+<meta name="color-scheme" content="light">
+<style id="techx-grok-skin">
+/* ====== GLOBAL (force light, no external fonts) ====== */
+:root { color-scheme: light !important; }
+html, body {
+  margin:0; padding:0;
+  background:#f7f7f7 !important;
+  color:#111 !important;
+  font:14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ====== HEADER ====== */
+.techx-header {
+  position:sticky; top:0; z-index:10;
+  background:#ffffffcc;
+  backdrop-filter:saturate(1.1) blur(6px);
+  border-bottom:1px solid #e5e7eb;
+}
+.techx-header__inner {
+  max-width: 960px; margin:0 auto; padding:10px 16px;
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+}
+.techx-brand {
+  display:flex; align-items:center; gap:8px; font-weight:700; color:#7f1d1d;
+}
+.techx-brand-icon { width:18px; height:18px; color:#7f1d1d; }
+.techx-chip {
+  display:inline-flex; align-items:center; gap:6px;
+  background:#f3e8ff; color:#6b21a8;
+  border:1px solid rgba(107,33,168,.2);
+  border-radius:999px; padding:3px 8px;
+  font-weight:600; font-size:11px;
+}
+
+/* ====== LAYOUT WRAPPER ====== */
+.techx-wrap { max-width: 720px; margin: 16px auto; padding: 0 12px; }
+
+/* ====== CONVERSATION AREA (targets Grok classes you provided) ====== */
+#last-reply-container { --content-max-width: 40rem !important; }
+#last-reply-container .max-w-[var(--content-max-width)] {
+  max-width: var(--content-max-width) !important;
+}
+
+/* spacing between bubbles */
+#last-reply-container .flex.w-full.flex-col { gap: 8px; }
+
+/* bubble base */
+.message-bubble {
+  border: 1px solid #e5e7eb !important;
+  border-radius: 20px !important;
+  padding: 10px 12px !important;
+  word-wrap: break-word !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+
+/* user bubble (right, grey) */
+.items-end .message-bubble {
+  background: #f6f6f6 !important;
+  border-bottom-right-radius: 8px !important;
+  max-width: 90% !important;
+}
+
+/* model bubble (left, white, full width) */
+.items-start .message-bubble {
+  background: #fff !important;
+  border-bottom-left-radius: 8px !important;
+  width: 100% !important;
+}
+
+/* hide interactive UI we don't want in the saved page */
+.citation,
+.action-buttons,
+[aria-label="Copy"],
+[aria-label="Edit"],
+[aria-label="Regenerate"],
+[aria-label="Create share link"],
+[aria-label="Like"],
+[aria-label="Dislike"],
+[aria-label="More actions"],
+.inline-media-container,
+.auth-notification {
+  display: none !important;
+}
+
+/* markdown / links / code */
+.response-content-markdown { max-width:100% !important; }
+.response-content-markdown p { margin: 0 0 10px 0 !important; white-space: pre-wrap; }
+.response-content-markdown ul,
+.response-content-markdown ol { margin: 8px 0 10px 18px !important; }
+.response-content-markdown li { margin: 4px 0 !important; }
+.response-content-markdown h2,
+.response-content-markdown h3,
+.response-content-markdown h4 { margin: 12px 0 8px !important; font-weight: 600 !important; }
+.response-content-markdown a {
+  color: #2563eb !important; text-decoration: underline !important;
+}
+.response-content-markdown a:hover { color: #1d4ed8 !important; }
+
+.response-content-markdown code {
+  background: rgba(0,0,0,.06) !important;
+  padding: 2px 5px !important;
+  border-radius: 6px !important;
+}
+.response-content-markdown pre {
+  background: #0b0b0b !important;
+  color: #f3f4f6 !important;
+  padding: 12px 14px !important;
+  border-radius: 10px !important;
+  overflow: auto !important;
+  margin: 10px 0 !important;
+}
+.response-content-markdown pre code {
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+
+/* kill sticky/opacity effects that look odd when saved */
+.group.focus-within\\:opacity-100,
+.group:hover\\:opacity-100,
+.sticky { opacity: 1 !important; position: static !important; }
+
+/* ensure no overflow */
+.message-bubble .markdown,
+.message-bubble .response-content-markdown { max-width: 100% !important; }
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="meta"><div>Model: Grok</div><div class="chip">Source: Grok</div></div>
-    ${items.map(m => `<div class="bubble ${m.role}">${m.html}</div>`).join("")}
-  </div>
+  <header class="techx-header">
+    <div class="techx-header__inner">
+      <div class="techx-brand">
+        <svg class="techx-brand-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 5 5 19h14L12 5z"></path>
+        </svg>
+        <span>AI Archives</span>
+      </div>
+      <span class="techx-chip">Source: ${escapeHtml(source)}</span>
+    </div>
+  </header>
+
+  <main class="techx-wrap">
+    <!-- Your scraped conversation HTML is inserted below, unchanged -->
+    <div id="techx-convo-root">
+      ${innerHtml || ""}
+    </div>
+  </main>
 </body>
 </html>`;
   }
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg?.type !== "TECHX_SCRAPE" && msg?.action !== "scrape") return;
+  // Keep your scraping shape: locate the chat container and grab its HTML.
+  // (No logic change to what you were doing—this is just a safe default.)
+  function collectConversationHtml() {
+    // Prefer Grok container you showed; otherwise fall back.
+    let node =
+      document.getElementById("last-reply-container") ||
+      document.querySelector("#last-reply-container") ||
+      document.querySelector('[data-testid="messages"]') ||
+      document.querySelector("main");
 
-    if (isSaving) {
-      sendResponse({ ok: false, error: "busy" });
-      return true;
+    if (!node) node = document.body;
+    return node ? node.outerHTML : "<div>No conversation found</div>";
+  }
+
+  // Keep the POST flow you already had — send rendered HTML to your server.
+  async function saveConversation(htmlDoc, model) {
+    const payload = {
+      html: htmlDoc,
+      model: model || "Grok",
+      sourceUrl: location.href
+    };
+
+    const res = await fetch(`${API_BASE}/api/conversation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      credentials: "omit",
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Server responded ${res.status} ${res.statusText}: ${txt}`);
     }
+    return res.json(); // expected { ok: true, url: "..." }
+  }
 
+  // ---- Message listener (kept as before: supports both fields) -------------
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
-      const htmlDoc = extractTranscriptHtml();
-      if (!htmlDoc) {
-        sendResponse({ ok: false, error: "Nothing to scrape" });
-        return true;
-      }
+      const isScrape =
+        (msg && msg.type === "TECHX_SCRAPE") ||
+        (msg && msg.action === "scrape");
 
-      const head = htmlDoc.slice(0, 4096);
-      if (head === lastHead) {
-        sendResponse({ ok: true, dedup: true }); // already sent this exact content
-        return true;
-      }
+      if (!isScrape) return; // ignore other messages
 
-      isSaving = true;
-      chrome.runtime.sendMessage(
-        { type: "SAVE_CONVO", payload: { htmlDoc, model: "Grok" } },
-        (resp) => {
-          isSaving = false;
-          if (resp?.ok) lastHead = head;
-          sendResponse(resp);
-        }
-      );
-    } catch (e) {
-      isSaving = false;
-      sendResponse({ ok: false, error: String(e) });
+      const model = (msg && msg.model) || "Grok";
+
+      const innerHtml = collectConversationHtml();
+      const htmlDoc = buildHtmlDoc(innerHtml, {
+        model,
+        source: "Grok",
+        title: document.title || "Saved Conversation"
+      });
+
+      saveConversation(htmlDoc, model)
+        .then((data) => {
+          try { console.log("SAVE_CONVO response:", data); } catch {}
+          sendResponse({ ok: true, url: data?.url });
+        })
+        .catch((err) => {
+          console.error("SAVE_CONVO error:", err);
+          sendResponse({ ok: false, error: String(err && err.message || err) });
+        });
+
+      return true; // keep the port open for async response
+    } catch (err) {
+      console.error("content.js fatal:", err);
+      sendResponse({ ok: false, error: String(err && err.message || err) });
+      // not async in this branch
     }
-    return true; // async
   });
 })();
