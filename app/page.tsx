@@ -85,6 +85,7 @@ function platformBadgeClass(platform: string): string {
 
 function toCard(item: ConversationLike): CardData {
   const maybeId = item.id ?? item.conversationId ?? item._id ?? item.slug;
+
   const id: string | number =
     typeof maybeId === 'string' || typeof maybeId === 'number'
       ? maybeId

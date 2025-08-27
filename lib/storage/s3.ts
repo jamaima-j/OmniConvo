@@ -56,7 +56,7 @@ class S3StorageClient {
         Bucket: this.bucketName,
         Key: key,
         Body: content,
-        ContentType: 'text/html',
+        ContentType:"text/html; charset=utf-8",
       })
     );
 
