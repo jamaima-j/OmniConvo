@@ -6,6 +6,7 @@
 // - Opens exactly one tab on success
 
 const API_BASE = "https://jomniconvo.duckdns.org";
+console.log("[TechX SW] loaded v", chrome.runtime.getManifest().version);
 
 // per-tab "busy" lock to prevent double shares
 const busyByTab = new Map();
@@ -69,6 +70,7 @@ html,body{margin:0;padding:0;background:var(--surface);color:var(--fg-primary);f
 function buildHtmlDoc(innerHtml, meta = {}) {
   const title  = meta.title  || "Saved Conversation";
   const looksMinimal = /id=["']last-reply-container["']/.test(innerHtml);
+  console.log("[TechX SW] looksMinimal:", /id=['"]last-reply-container['"]/.test(innerHtml), "len:", innerHtml?.length);
 
   const bodyContent = looksMinimal
     ? innerHtml

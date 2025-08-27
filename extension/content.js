@@ -1,4 +1,5 @@
-// content.js — scrape ONLY Q&A, rebuild minimal conversation with your bubble CSS, chunked upload via background
+// content.js — Q&A-only scraper for Grok with strict root + whitelist sanitization
+// Flow: popup -> content (scrape) -> background (upload) -> server
 
 // ===================== 1) Inject the bubble skin once =====================
 (() => {
@@ -22,6 +23,7 @@
     --shadow-soft:0 2px 10px rgba(0,0,0,.35);
   }
 }
+html,body{background:var(--surface);color:var(--fg-primary);font:14px/1.45 var(--serif);}
 .text-primary{color:var(--fg-primary)} .text-secondary{color:var(--fg-secondary)}
 .bg-surface-l1{background:var(--surface-l1)} .bg-surface-l2{background:var(--surface-l2)}
 .border{border:1px solid var(--border-l1)} .border-border-l1{border-color:var(--border-l1)}
@@ -32,11 +34,6 @@
 .message-bubble{background:var(--surface-l2);border:1px solid var(--border-l1);color:var(--fg-primary);
   padding:.65rem .9rem;border-radius:var(--radius-3xl);box-shadow:var(--shadow-soft);word-break:break-word}
 .message-bubble.rounded-br-lg{border-bottom-right-radius:var(--radius-lg)}
-.action-buttons{opacity:0;transition:opacity .15s ease}
-.group:hover .action-buttons,.group:focus-within .action-buttons,.last-response .action-buttons{opacity:1}
-.action-buttons button{background:transparent;border:0;color:var(--fg-secondary);width:2rem;height:2rem;border-radius:9999px;
-  display:inline-flex;align-items:center;justify-content:center;transition:background .12s,color .12s,opacity .12s}
-.action-buttons button:hover{background:var(--ghost-hover);color:var(--fg-primary)}
 .prose{max-width:100%;line-height:1.65}
 .prose p,.prose ul,.prose ol{margin:.5rem 0} .prose strong{font-weight:600}
 .prose li{margin:.35rem 0;padding-inline-start:.25rem} .prose ul{list-style:disc;padding-left:1.25rem}
@@ -48,9 +45,6 @@
   border-radius:12px;overflow:auto;font-family:var(--mono);font-size:.9em;line-height:1.5}
 .response-content-markdown code{white-space:pre}
 .inline-media-container,.auth-notification{margin-top:.35rem}
-.group .opacity-0{opacity:0;transition:opacity .15s ease}
-.group:hover .opacity-0,.group:focus-within .opacity-0,.last-response .opacity-0{opacity:1}
-.hover\\:bg-button-ghost-hover:hover{background:var(--ghost-hover)}
 `;
 
   function inject() {
@@ -68,84 +62,106 @@
   }
 })();
 
-// ===================== 2) Build a MINIMAL Q&A-only HTML =====================
+// ===================== 2) Q&A extraction (strict Grok root) =====================
 (() => {
   const CHUNK_SIZE = 128 * 1024;
+  const log = (...a) => { try { console.log('[TechX content]', ...a); } catch {} };
 
-  function log(...a){ try{ console.log('[TechX content]', ...a); }catch{} }
+  const ALLOWED = new Set([
+    'P','UL','OL','LI','PRE','CODE','H2','H3','H4','A','STRONG','EM','BLOCKQUOTE',
+    'TABLE','THEAD','TBODY','TR','TH','TD','IMG','BR'
+  ]);
 
-  // --- Sanitizers ---
-  function stripDangerousAndAttrs(root) {
-    root.querySelectorAll('script,style,link,iframe,object,embed,svg,button').forEach(n => n.remove());
-    root.querySelectorAll('*').forEach(el => {
-      // remove inline styles and event handlers
-      [...el.attributes].forEach(attr => {
-        const n = attr.name.toLowerCase();
-        if (n === 'style' || n.startsWith('on') || n.startsWith('data-') || n.startsWith('aria-')) {
-          el.removeAttribute(attr.name);
-        }
-      });
-    });
-    return root;
+  function escapeHtml(s){
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  function sanitizeAssistantHTML(sourceEl) {
+  // Remove scripts/styles/buttons/sticky/thinkers/attrs and unwrap disallowed tags
+  function sanitizeAssistantNode(sourceEl) {
     const clone = sourceEl.cloneNode(true);
-    stripDangerousAndAttrs(clone);
+
+    // Kill obvious junk
+    clone.querySelectorAll([
+      'script','style','link','iframe','object','embed','svg','button',
+      '.citation','.action-buttons','.thinking-container','.think-box',
+      '.sticky','[class*="sticky"]','.inline-media-container','.auth-notification'
+    ].join(',')).forEach(n => n.remove());
+
+    // Attributes & elements
+    const walker = document.createTreeWalker(clone, NodeFilter.SHOW_ELEMENT);
+    const toRemove = [];
+    const toUnwrap = [];
+
+    let node;
+    while ((node = walker.nextNode())) {
+      const tag = node.tagName;
+
+      // Strip attrs
+      [...node.attributes].forEach(a => {
+        const n = a.name.toLowerCase();
+        if (n === 'style' || n.startsWith('on') || n.startsWith('data-') || n.startsWith('aria-')) {
+          node.removeAttribute(a.name);
+        }
+        if (tag === 'A' && n === 'href' && !/^https?:/i.test(a.value)) node.removeAttribute('href');
+        if (tag === 'IMG') {
+          if (n === 'src' && !/^https?:/i.test(a.value)) toRemove.push(node);
+          if (n !== 'src' && n !== 'alt') node.removeAttribute(a.name);
+        }
+      });
+
+      // Only keep allowed tags – unwrap others (keep their children)
+      if (!ALLOWED.has(tag)) {
+        if (tag === 'DIV' || tag === 'SPAN' || tag === 'SECTION' || tag === 'ARTICLE') {
+          toUnwrap.push(node);
+        } else {
+          toRemove.push(node);
+        }
+      }
+    }
+
+    toRemove.forEach(n => n.remove());
+    toUnwrap.forEach(n => n.replaceWith(...n.childNodes));
+
     return clone.innerHTML;
   }
 
   function sanitizeUserText(el) {
-    const txt = (el.innerText || el.textContent || '').replace(/\u00A0/g, ' ').trim();
+    const txt = (el.innerText || el.textContent || '').replace(/\u00A0/g,' ').trim();
     return txt;
   }
 
-  // --- Collect messages in chronological order ---
-  // Heuristics for Grok-like pages:
-  // - USER:    .items-end .message-bubble  (right bubble)
-  // - ASSIST:  .items-start .response-content-markdown (answer area)
-  function collectMessages() {
-    const root =
-      document.getElementById('last-reply-container') ||
-      document.querySelector('#last-reply-container') ||
-      document.querySelector('[data-testid="messages"]') ||
-      document.querySelector('main') || document.body;
+  // STRICT root: only Grok container. If not found, bail — prevents “whole page” grabs.
+  function getRoot() {
+    return document.querySelector('#last-reply-container') || null;
+  }
 
+  function collectMessages() {
+    const root = getRoot();
     if (!root) return [];
 
     const messages = [];
-    const walker = document.createTreeWalker(
-      root,
-      NodeFilter.SHOW_ELEMENT,
-      {
-        acceptNode(node) {
-          try {
-            if (!(node instanceof Element)) return NodeFilter.FILTER_SKIP;
-            if (node.matches('.items-end .message-bubble')) return NodeFilter.FILTER_ACCEPT;        // user
-            if (node.matches('.items-start .response-content-markdown')) return NodeFilter.FILTER_ACCEPT; // assistant
-            return NodeFilter.FILTER_SKIP;
-          } catch { return NodeFilter.FILTER_SKIP; }
-        }
-      }
-    );
+    // Walk in DOM order and pick only bubbles inside the conversation container
+    const userSel = '.items-end .message-bubble';
+    const assistantSel = '.items-start .response-content-markdown';
 
-    let n;
-    while ((n = walker.nextNode())) {
-      if (n.matches('.items-end .message-bubble')) {
-        messages.push({ role: 'user', text: sanitizeUserText(n) });
+    const nodes = root.querySelectorAll(`${userSel}, ${assistantSel}`);
+    nodes.forEach(n => {
+      if (n.matches(userSel)) {
+        const t = sanitizeUserText(n);
+        if (t) messages.push({ role:'user', text:t });
       } else {
-        messages.push({ role: 'assistant', html: sanitizeAssistantHTML(n) });
+        const html = sanitizeAssistantNode(n);
+        if (html && html.replace(/\s+/g,'').length) messages.push({ role:'assistant', html });
       }
-    }
+    });
 
-    // Filter empties
-    return messages.filter(m => (m.role === 'user' ? m.text : m.html)?.length);
+    return messages;
   }
 
-  // --- Rebuild conversation with JUST bubbles inside the minimal container ---
   function buildMinimalConversationHTML(messages) {
     const start = `<div class="flex w-full flex-col" id="last-reply-container" style="--gutter-width: calc((100cqw - var(--content-width)) / 2);">`;
-    const end   = `</div>`;
+    const end = `</div>`;
     const parts = [start];
 
     for (const m of messages) {
@@ -155,8 +171,6 @@
   <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-0.5 items-end">
     <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose dark:prose-invert break-words prose-p:opacity-100 prose-strong:opacity-100 prose-li:opacity-100 prose-ul:opacity-100 prose-ol:opacity-100 prose-ul:my-1 prose-ol:my-1 prose-li:my-2 last:prose-li:mb-3 prose-li:ps-1 prose-li:ms-1 bg-surface-l2 border border-border-l1 max-w-[100%] sm:max-w-[90%] px-4 py-2.5 rounded-br-lg">
       <span class="whitespace-pre-wrap">${escapeHtml(m.text)}</span>
-      <section class="inline-media-container flex flex-col gap-1"></section>
-      <section class="auth-notification flex flex-col gap-1"></section>
     </div>
   </div>
 </div>`
@@ -178,12 +192,7 @@
     return parts.join('\n');
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
-
-  // --- Send to background in chunks ---
+  // ---------------- chunked send to background ----------------
   function sendMessagePromise(payload) {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage(payload, (resp) => {
@@ -227,28 +236,38 @@
     });
   }
 
-  // ===================== 3) Entry point from popup =====================
+  // ===================== 3) Handle popup request =====================
   let busy = false;
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (window !== window.top) return; // top frame only
-
     const isScrape = msg && (msg.type === "TECHX_SCRAPE" || msg.action === "scrape");
     if (!isScrape) return;
 
     if (busy) { sendResponse({ ok:false, error:"Busy" }); return; }
-
     busy = true;
+
     (async () => {
       try {
-        const model = (msg && msg.model) || "Grok";
-        const messages = collectMessages();
+        const root = document.querySelector('#last-reply-container');
+        if (!root) {
+          busy = false;
+          sendResponse({ ok:false, error:"Grok conversation container not found (#last-reply-container)" });
+          return;
+        }
 
+        const messages = collectMessages();
         log('Found messages:', messages.length);
 
-        const minimalHtml = buildMinimalConversationHTML(messages.length ? messages : []);
+        if (!messages.length) {
+          busy = false;
+          sendResponse({ ok:false, error:"No Q&A messages found (selectors may need update)" });
+          return;
+        }
+
+        const minimalHtml = buildMinimalConversationHTML(messages);
         const resp = await uploadInChunks(minimalHtml, {
-          model,
+          model: (msg && msg.model) || "Grok",
           source: "Grok",
           title: document.title || "Saved Conversation"
         });
@@ -265,5 +284,5 @@
     return true; // keep channel open
   });
 
-  log('TechX content script ready (Q&A only):', location.href);
+  log('TechX content script ready (Grok Q&A only):', location.href);
 })();
