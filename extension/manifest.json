@@ -35,11 +35,15 @@
   "content_scripts": [
     {
       "matches": [
-        "https://grok.com/chat/*",
-        "https://www.grok.com/chat/*",
-        "https://x.ai/chat/*",
-        "https://www.x.ai/chat/*"
-      ],
+      "https://grok.com/*",
+      "https://www.grok.com/*",
+      "https://x.ai/*",
+      "https://www.x.ai/*",
+      "https://claude.ai/*",
+      "https://gemini.google.com/*",
+      "https://chatgpt.com/*",
+      "https://chat.openai.com/*"
+    ],
       "js": ["content.js"],
       "run_at": "document_idle",
       "all_frames": false,
