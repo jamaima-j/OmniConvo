@@ -1,13 +1,9 @@
-// content.js (style-only update + correct FormData POST + top-frame guard)
+// content.js — logic preserved (upload via background), HTML/CSS updated only
 (() => {
-  const API_BASE = "https://jomniconvo.duckdns.org";
+  // Debug which frame is running
+  try { console.log("TechX content script ready (frame):", location.href); } catch {}
 
-  // Debug so you can see which frame is active
-  try {
-    console.log("TechX content script ready (frame):", location.href);
-  } catch {}
-
-  // ---- Helpers -------------------------------------------------------------
+  // ---------- helpers ----------
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -16,9 +12,8 @@
       .replace(/"/g, "&quot;");
   }
 
-  // STYLE-ONLY: new HTML wrapper. Pass your scraped inner HTML as `innerHtml`.
+  // Build the saved HTML document (style-only change)
   function buildHtmlDoc(innerHtml, meta = {}) {
-    const model = meta.model || "Grok";
     const source = meta.source || "Grok";
     const title  = meta.title  || "Saved Conversation";
 
@@ -66,7 +61,7 @@ html, body {
 /* ====== LAYOUT WRAPPER ====== */
 .techx-wrap { max-width: 720px; margin: 16px auto; padding: 0 12px; }
 
-/* ====== CONVERSATION AREA (targets Grok classes you provided) ====== */
+/* ====== CONVERSATION AREA (uses classes you showed) ====== */
 #last-reply-container { --content-max-width: 40rem !important; }
 #last-reply-container .max-w-[var(--content-max-width)] {
   max-width: var(--content-max-width) !important;
@@ -146,7 +141,7 @@ html, body {
   border-radius: 0 !important;
 }
 
-/* kill sticky/opacity effects that look odd when saved */
+/* kill sticky/opacity that look odd when saved */
 .group.focus-within\\:opacity-100,
 .group:hover\\:opacity-100,
 .sticky { opacity: 1 !important; position: static !important; }
@@ -170,7 +165,7 @@ html, body {
   </header>
 
   <main class="techx-wrap">
-    <!-- Your scraped conversation HTML is inserted below, unchanged -->
+    <!-- scraped conversation HTML goes here, unchanged -->
     <div id="techx-convo-root">
       ${innerHtml || ""}
     </div>
@@ -179,9 +174,8 @@ html, body {
 </html>`;
   }
 
-  // Keep your scraping shape: locate the chat container and grab its HTML.
+  // Grab the conversation DOM you showed earlier
   function collectConversationHtml() {
-    // Prefer Grok container you showed; otherwise fall back.
     let node =
       document.getElementById("last-reply-container") ||
       document.querySelector("#last-reply-container") ||
@@ -192,75 +186,57 @@ html, body {
     return node ? node.outerHTML : "<div>No conversation found</div>";
   }
 
-  // Correct FormData POST (server expects req.formData())
-  async function saveConversation(htmlDoc, model) {
-    const fd = new FormData();
-    // include both keys for compatibility with your server
-    fd.append("htmlDoc", htmlDoc || "");
-    fd.append("html", htmlDoc || "");
-    fd.append("model", model || "Grok");
-    fd.append("sourceUrl", location.href);
-    fd.append("title", document.title || "Saved Conversation");
-
-    const res = await fetch(`${API_BASE}/api/conversation`, {
-      method: "POST",
-      body: fd,            // IMPORTANT: no manual Content-Type header
-      cache: "no-store",
-      credentials: "omit",
-    });
-
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(`Server responded ${res.status} ${res.statusText}: ${txt}`);
-    }
-    return res.json(); // expected { ok: true, url: "..." }
-  }
-
-  // ---- Message listener (top-frame only to avoid double saves) -------------
+  // ---------- message listener (same trigger, upload delegated to background) ----------
   let __techxBusy = false;
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    // Only the top frame should handle messages
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // Prevent double-saves from iframes
     if (window !== window.top) return;
 
+    const isScrape = (msg && msg.type === "TECHX_SCRAPE") || (msg && msg.action === "scrape");
+    if (!isScrape) return;
+
+    if (__techxBusy) {
+      sendResponse({ ok: false, error: "Busy" });
+      return;
+    }
+    __techxBusy = true;
+
     try {
-      const isScrape =
-        (msg && msg.type === "TECHX_SCRAPE") ||
-        (msg && msg.action === "scrape");
-      if (!isScrape) return;
-
-      if (__techxBusy) {
-        sendResponse({ ok: false, error: "Busy" });
-        return;
-      }
-      __techxBusy = true;
-
       const model = (msg && msg.model) || "Grok";
       const innerHtml = collectConversationHtml();
       const htmlDoc = buildHtmlDoc(innerHtml, {
-        model,
         source: "Grok",
-        title: document.title || "Saved Conversation",
+        title: document.title || "Saved Conversation"
       });
 
-      saveConversation(htmlDoc, model)
-        .then((data) => {
-          try { console.log("SAVE_CONVO response:", data); } catch {}
-          sendResponse({ ok: true, url: data?.url });
-        })
-        .catch((err) => {
-          console.error("SAVE_CONVO error:", err);
-          sendResponse({ ok: false, error: String(err && err.message || err) });
-        })
-        .finally(() => { __techxBusy = false; });
+      // ⬇️ Keep original logic: background does the network request (no CORS issues)
+      chrome.runtime.sendMessage(
+        {
+          type: "TECHX_UPLOAD",
+          html: htmlDoc,
+          model,
+          sourceUrl: location.href,
+          title: document.title || "Saved Conversation",
+        },
+        (resp) => {
+          __techxBusy = false;
 
-      // keep the message channel open for the async response
-      return true;
+          if (chrome.runtime.lastError) {
+            console.error("TECHX_UPLOAD sendMessage error:", chrome.runtime.lastError.message);
+            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          // Pass background’s response back to popup
+          sendResponse(resp ?? { ok: false, error: "No response" });
+        }
+      );
+
+      return true; // keep the channel open for async response
     } catch (err) {
       __techxBusy = false;
       console.error("content.js fatal:", err);
-      sendResponse({ ok: false, error: String(err && err.message || err) });
-      // not async in this branch
+      sendResponse({ ok: false, error: String(err?.message || err) });
     }
   });
 })();
