@@ -1,7 +1,7 @@
 // background.js (type: "module")
 const API_BASE = "https://jomniconvo.duckdns.org";
 
-// small helper: retry on transient network/5xx (incl. 504)
+// Retry helper for transient network/5xx (incl. 504)
 async function postWithRetry(formData, attempts = 3, timeoutMs = 20000) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
@@ -11,7 +11,7 @@ async function postWithRetry(formData, attempts = 3, timeoutMs = 20000) {
 
       const res = await fetch(`${API_BASE}/api/conversation`, {
         method: "POST",
-        body: formData, // let browser set multipart boundary
+        body: formData,                 // multipart/form-data
         cache: "no-store",
         credentials: "omit",
         signal: controller.signal,
@@ -21,7 +21,7 @@ async function postWithRetry(formData, attempts = 3, timeoutMs = 20000) {
 
       if (res.ok) return res.json();
 
-      // retry on 502/503/504 or other 5xx
+      // Retry on 5xx, otherwise throw with body for debugging
       if (res.status >= 500) {
         lastErr = new Error(`${res.status} ${res.statusText}`);
       } else {
@@ -30,10 +30,8 @@ async function postWithRetry(formData, attempts = 3, timeoutMs = 20000) {
       }
     } catch (e) {
       lastErr = e;
-      // if aborted or network failed, backoff and retry
     }
-    // simple backoff
-    await new Promise(r => setTimeout(r, 800 * (i + 1)));
+    await new Promise(r => setTimeout(r, 800 * (i + 1))); // backoff
   }
   throw lastErr || new Error("Upload failed");
 }
@@ -44,9 +42,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (msg?.type !== "TECHX_UPLOAD") return;
 
       const fd = new FormData();
-      fd.append("html", msg.html || "");
+
+      // IMPORTANT: server expects `htmlDoc`
+      fd.append("htmlDoc", msg.html || "");          // primary field
+      fd.append("html", msg.html || "");             // optional back-compat
       fd.append("model", msg.model || "Grok");
       fd.append("sourceUrl", msg.sourceUrl || "");
+      // Optional: send a title if you want (server can ignore it)
+      if (msg.title) fd.append("title", msg.title);
 
       const data = await postWithRetry(fd);
       sendResponse({ ok: true, url: data?.url });
