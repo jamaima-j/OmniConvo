@@ -1,5 +1,4 @@
-// content.js — scrape ONLY Q&A, rebuild minimal conversation, chunked upload via background
-// No CSS injection here (to avoid breaking Grok). All styling happens in background.js.
+// content.js 
 
 // ===================== helpers =====================
 const CHUNK_SIZE = 128 * 1024;
@@ -37,9 +36,7 @@ function escapeHtml(s) {
 }
 
 // ===================== collect messages =====================
-// Heuristics for Grok-like pages:
-// - USER:    .items-end .message-bubble  (right bubble)
-// - ASSIST:  .items-start .response-content-markdown (answer area)
+// Collect *all* user + assistant messages in page order
 function collectMessages() {
   const root =
     document.getElementById('last-reply-container') ||
@@ -50,48 +47,47 @@ function collectMessages() {
   if (!root) return [];
 
   const messages = [];
-  const walker = document.createTreeWalker(
-    root,
-    NodeFilter.SHOW_ELEMENT,
-    {
-      acceptNode(node) {
-        try {
-          if (!(node instanceof Element)) return NodeFilter.FILTER_SKIP;
-          if (node.matches('.items-end .message-bubble')) return NodeFilter.FILTER_ACCEPT;        // user
-          if (node.matches('.items-start .response-content-markdown')) return NodeFilter.FILTER_ACCEPT; // assistant
-          return NodeFilter.FILTER_SKIP;
-        } catch { return NodeFilter.FILTER_SKIP; }
-      }
-    }
-  );
+  const userNodes = root.querySelectorAll(".items-end .message-bubble");
+  const assistantNodes = root.querySelectorAll(".items-start .response-content-markdown");
 
-  let n;
-  while ((n = walker.nextNode())) {
-    if (n.matches('.items-end .message-bubble')) {
-      messages.push({ role: 'user', text: sanitizeUserText(n) });
+  const allNodes = [];
+  userNodes.forEach(n => allNodes.push({ el: n, role: "user" }));
+  assistantNodes.forEach(n => allNodes.push({ el: n, role: "assistant" }));
+
+  // Preserve DOM order
+  allNodes.sort((a, b) => {
+    return a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+
+  for (const n of allNodes) {
+    if (n.role === "user") {
+      const txt = sanitizeUserText(n.el);
+      if (txt) messages.push({ role: "user", text: txt });
     } else {
-      messages.push({ role: 'assistant', html: sanitizeAssistantHTML(n) });
+      const html = sanitizeAssistantHTML(n.el);
+      if (html) messages.push({ role: "assistant", html });
     }
   }
 
-  return messages.filter(m => (m.role === 'user' ? m.text : m.html)?.length);
+  return messages;
 }
 
-// ===================== rebuild minimal HTML (no chrome around it) =====================
+// ===================== rebuild minimal HTML =====================
+// Now label Q and A for clarity, keep your bubble CSS
 function buildMinimalConversationHTML(messages) {
   const start = `<div class="flex w-full flex-col" id="last-reply-container" style="--gutter-width: calc((100cqw - var(--content-width)) / 2);">`;
   const end   = `</div>`;
   const parts = [start];
 
+  let qCount = 1, aCount = 1;
+
   for (const m of messages) {
     if (m.role === 'user') {
       parts.push(
 `<div class="flex flex-col items-center">
-  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-0.5 items-end">
-    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose break-words bg-surface-l2 border border-border-l1 max-w-[100%] sm:max-w-[90%] px-4 py-2.5 rounded-br-lg">
-      <span class="whitespace-pre-wrap">${escapeHtml(m.text)}</span>
-      <section class="inline-media-container flex flex-col gap-1"></section>
-      <section class="auth-notification flex flex-col gap-1"></section>
+  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-1 items-end">
+    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose break-words bg-surface-l2 border border-border-l1 px-4 py-2.5 rounded-br-lg">
+      <strong>Q${qCount++}:</strong> <span class="whitespace-pre-wrap">${escapeHtml(m.text)}</span>
     </div>
   </div>
 </div>`
@@ -99,8 +95,9 @@ function buildMinimalConversationHTML(messages) {
     } else {
       parts.push(
 `<div class="flex flex-col items-center">
-  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-0.5 items-start">
+  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-1 items-start">
     <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose break-words w-full max-w-none">
+      <strong>A${aCount++}:</strong>
       <div class="response-content-markdown markdown">${m.html}</div>
     </div>
   </div>
@@ -190,4 +187,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // keep channel open
 });
 
-log('TechX content script ready (Q&A only):', location.href);
+log('TechX content script ready (Q&A full):', location.href);

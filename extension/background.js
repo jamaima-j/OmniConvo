@@ -1,8 +1,4 @@
-// background.js — MV3 service worker
-// - Accepts chunked HTML from content
-// - Wraps with a SCOPED bubble CSS (only under #techx-convo)
-// - Posts FormData to your server (with retry on 502/503/504/522)
-// - Opens exactly one tab on success
+// background.js 
 
 const API_BASE = "https://jomniconvo.duckdns.org";
 console.log("[TechX SW] loaded v", chrome.runtime.getManifest().version);
@@ -10,7 +6,7 @@ console.log("[TechX SW] loaded v", chrome.runtime.getManifest().version);
 // per-tab "busy" lock to prevent double shares
 const busyByTab = new Map();
 
-// in-memory upload sessions: { [uploadId]: { tabId, meta, chunks: Map(index->string), total, t } }
+// in-memory upload sessions
 const uploads = new Map();
 
 // ---------------- utils ----------------
@@ -20,7 +16,7 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-// All rules are scoped under #techx-convo so they never leak
+
 const BUBBLE_CSS = `
 #techx-convo{
   /* font + sizing */
@@ -155,7 +151,7 @@ const BUBBLE_CSS = `
 #techx-convo [aria-label]{display:none !important}
 `;
 
-// Build the final HTML document we upload (scoped under #techx-convo)
+
 function buildHtmlDoc(innerHtml, meta = {}) {
   const title  = meta.title  || "Saved Conversation";
   const bodyContent = `<div id="techx-convo">${innerHtml || ""}</div>`;
@@ -176,7 +172,7 @@ ${bodyContent}
 async function postForm(htmlDoc, { model, sourceUrl, title }, timeoutMs = 120000) {
   const fd = new FormData();
 
-  // Send as file fields so multer-style servers pick them up
+  
   const htmlBlob = new Blob([htmlDoc], { type: "text/html; charset=utf-8" });
   fd.append("htmlDoc", htmlBlob, "conversation.html");
   fd.append("html",    htmlBlob, "conversation.html");

@@ -39,7 +39,7 @@ async function sharePublic() {
 
     if (!resp?.ok) throw new Error(resp?.error || "Scrape failed");
 
-    // success (background already opened the share URL)
+    
     window.close();
   } catch (e) {
     console.error(e);

@@ -1,6 +1,6 @@
 import type { Conversation } from '@/types/conversation';
 
-/** ===== Minimal, portable CSS for archived pages (no external fonts/CDNs) ===== */
+/** ===== Minimal,  CSS for archived pages ===== */
 const ARCHIVE_CSS = `
 :root{--fg:#111827;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--blue:#3b82f6;--green:#10b981;}
 *{box-sizing:border-box}
@@ -22,7 +22,7 @@ hr{border:none;border-top:1px solid var(--line);margin:20px 0}
 small{color:var(--muted)}
 `;
 
-/** Safe helper: return the first capture group or null */
+/**safe helper: return null */
 function firstGroup(html: string, re: RegExp): string | null {
   const m = re.exec(html);
   return (m && typeof m[1] === 'string') ? m[1] : null;
@@ -41,16 +41,16 @@ function extractConversationHtml(fullHtml: string): string {
   );
   if (conv && conv.trim().length > 200) return conv;
 
-  // 3) <article>...</article>
+  
   const article = firstGroup(fullHtml, /<article[\s\S]*?>([\s\S]*?)<\/article>/i);
   if (article && article.trim().length > 200) return article;
 
-  // 4) fallback: everything inside <body>
+  
   const body = firstGroup(fullHtml, /<body[\s\S]*?>([\s\S]*?)<\/body>/i);
   return body ?? fullHtml;
 }
 
-/** Light normalization so the template styles kick in cleanly. */
+
 function normalizeConversationHtml(html: string): string {
   let out = html;
 
@@ -60,7 +60,7 @@ function normalizeConversationHtml(html: string): string {
     `<pre class="${cls.includes('code') ? cls : `${cls} code`}"`,
   );
 
-  // Human/Assistant blocks if labeled
+  
   out = out.replace(
     /<p[^>]*>\s*(?:<strong>)?\s*Human:\s*(?:<\/strong>)?\s*([\s\S]*?)<\/p>/gi,
     '<div class="human">$1</div>'
@@ -70,13 +70,13 @@ function normalizeConversationHtml(html: string): string {
     '<div class="assistant">$2</div>'
   );
 
-  // Consistent blockquotes
+  
   out = out.replace(/<blockquote(?![^>]*class=)/gi, '<blockquote class="quote"');
 
   return out;
 }
 
-/** Wrap in a clean, self-contained HTML document */
+
 function renderArchiveHtml(bodyHtml: string, model = 'Grok') {
   const base = process.env.NEXT_PUBLIC_BASE_URL || '/';
   const when = new Date().toISOString();
@@ -106,7 +106,7 @@ function renderArchiveHtml(bodyHtml: string, model = 'Grok') {
 </html>`;
 }
 
-/** Extract a Grok share page into a structured, pretty Conversation. */
+/** extract a Grok share page into a structured, Conversation. */
 export async function parseGrok(html: string): Promise<Conversation> {
   const raw = extractConversationHtml(html);
   const normalized = normalizeConversationHtml(raw);

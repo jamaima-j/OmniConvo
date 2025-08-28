@@ -1,4 +1,4 @@
-// index.js (content script)
+// index.js 
 
 console.log("TechX content script loaded");
 
