@@ -1,9 +1,11 @@
-// content.js 
+// content.js — TechX: scrape ALL Q&A (global selectors), no page styling changes
 
 // ===================== helpers =====================
 const CHUNK_SIZE = 128 * 1024;
 
 function log(...a){ try{ console.log('[TechX content]', ...a); }catch{} }
+
+function delay(ms){ return new Promise(r => setTimeout(r, ms)); }
 
 function stripDangerousAndAttrs(root) {
   root.querySelectorAll('script,style,link,iframe,object,embed,svg,button').forEach(n => n.remove());
@@ -25,8 +27,7 @@ function sanitizeAssistantHTML(sourceEl) {
 }
 
 function sanitizeUserText(el) {
-  const txt = (el.innerText || el.textContent || '').replace(/\u00A0/g, ' ').trim();
-  return txt;
+  return (el.innerText || el.textContent || '').replace(/\u00A0/g, ' ').trim();
 }
 
 function escapeHtml(s) {
@@ -35,69 +36,87 @@ function escapeHtml(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ===================== collect messages =====================
-// Collect *all* user + assistant messages in page order
-function collectMessages() {
-  const root =
-    document.getElementById('last-reply-container') ||
-    document.querySelector('#last-reply-container') ||
-    document.querySelector('[data-testid="messages"]') ||
-    document.querySelector('main') || document.body;
+// ===================== preload ALL messages =====================
+// Many UIs lazy-load older messages when you reach the top.
+// We scroll the *page* (not #last-reply-container) to trigger it.
+async function preloadAllMessages() {
+  const scroller = document.scrollingElement || document.documentElement || document.body;
+  let lastHeight = -1;
+  for (let i = 0; i < 40; i++) {         // up to ~20s total
+    window.scrollTo(0, 0);
+    await delay(500);
+    const h = scroller.scrollHeight;
+    if (h === lastHeight) break;         // no more loading
+    lastHeight = h;
+  }
+  // bring back to bottom so last pair is also present
+  window.scrollTo(0, scroller.scrollHeight);
+  log('Preload done. scrollHeight=', lastHeight);
+}
 
-  if (!root) return [];
+// ===================== collect messages (GLOBAL) =====================
+// We query the whole document so we don't get trapped in #last-reply-container.
+function collectMessages() {
+  // Primary selectors seen on Grok-ish UIs
+  let nodes = Array.from(document.querySelectorAll(
+    '.items-end .message-bubble, .items-start .response-content-markdown'
+  ));
+
+  // Fallbacks if theme/markup changes
+  if (nodes.length < 2) {
+    const all = Array.from(document.querySelectorAll('.message-bubble, .response-content-markdown'));
+    nodes = all.filter(n => {
+      if (!(n instanceof Element)) return false;
+      if (n.closest('.items-end')) return true;     // user
+      if (n.closest('.items-start')) return true;   // assistant
+      return false;
+    });
+  }
+
+  log('Found candidate nodes:', nodes.length);
 
   const messages = [];
-  const userNodes = root.querySelectorAll(".items-end .message-bubble");
-  const assistantNodes = root.querySelectorAll(".items-start .response-content-markdown");
-
-  const allNodes = [];
-  userNodes.forEach(n => allNodes.push({ el: n, role: "user" }));
-  assistantNodes.forEach(n => allNodes.push({ el: n, role: "assistant" }));
-
-  // Preserve DOM order
-  allNodes.sort((a, b) => {
-    return a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
-  });
-
-  for (const n of allNodes) {
-    if (n.role === "user") {
-      const txt = sanitizeUserText(n.el);
-      if (txt) messages.push({ role: "user", text: txt });
-    } else {
-      const html = sanitizeAssistantHTML(n.el);
-      if (html) messages.push({ role: "assistant", html });
+  for (const el of nodes) {
+    const isUser = !!el.closest('.items-end');
+    if (isUser) {
+      const text = sanitizeUserText(el);
+      if (text) messages.push({ role: 'user', text });
+      continue;
     }
+    // assistant: prefer inner .response-content-markdown if bubble matched
+    const ans = el.matches('.response-content-markdown') ? el : (el.querySelector('.response-content-markdown') || el);
+    const html = sanitizeAssistantHTML(ans);
+    if (html && html.replace(/\s+/g,'').length) messages.push({ role: 'assistant', html });
   }
 
   return messages;
 }
 
-// ===================== rebuild minimal HTML =====================
-// Now label Q and A for clarity, keep your bubble CSS
+// ===================== rebuild minimal HTML (with Q/A labels) =====================
 function buildMinimalConversationHTML(messages) {
   const start = `<div class="flex w-full flex-col" id="last-reply-container" style="--gutter-width: calc((100cqw - var(--content-width)) / 2);">`;
   const end   = `</div>`;
   const parts = [start];
 
-  let qCount = 1, aCount = 1;
-
+  let q = 1, a = 1;
   for (const m of messages) {
     if (m.role === 'user') {
       parts.push(
-`<div class="flex flex-col items-center">
-  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-1 items-end">
-    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose break-words bg-surface-l2 border border-border-l1 px-4 py-2.5 rounded-br-lg">
-      <strong>Q${qCount++}:</strong> <span class="whitespace-pre-wrap">${escapeHtml(m.text)}</span>
+`<div class="flex flex-col items-center" style="margin:12px 0;">
+  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] items-end">
+    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose break-words bg-surface-l2 border border-border-l1 max-w-[100%] sm:max-w-[90%] px-4 py-2.5 rounded-br-lg">
+      <strong style="display:block;margin-bottom:4px;">Q${q++}:</strong>
+      <span class="whitespace-pre-wrap">${escapeHtml(m.text)}</span>
     </div>
   </div>
 </div>`
       );
     } else {
       parts.push(
-`<div class="flex flex-col items-center">
-  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] pb-1 items-start">
-    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose break-words w-full max-w-none">
-      <strong>A${aCount++}:</strong>
+`<div class="flex flex-col items-center" style="margin:12px 0;">
+  <div class="relative group flex flex-col justify-center w-full max-w-[var(--content-max-width)] items-start">
+    <div dir="auto" class="message-bubble rounded-3xl text-primary min-h-7 prose break-words w-full max-w-none" style="background:#e0f2ff;border:1px solid #e5e7eb;padding:.65rem .9rem;">
+      <strong style="display:block;margin-bottom:4px;">A${a++}:</strong>
       <div class="response-content-markdown markdown">${m.html}</div>
     </div>
   </div>
@@ -168,13 +187,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     try {
       const model = (msg && msg.model) || "Grok";
+
+      // ✅ make sure all older messages are mounted
+      await preloadAllMessages();
+
       const messages = collectMessages();
-      const minimalHtml = buildMinimalConversationHTML(messages.length ? messages : []);
+      log('Collected messages:', messages.length);
+
+      const minimalHtml = buildMinimalConversationHTML(messages);
       const resp = await uploadInChunks(minimalHtml, {
         model,
         source: "Grok",
         title: document.title || "Saved Conversation"
       });
+
       busy = false;
       if (resp?.ok) sendResponse({ ok:true, url: resp.url || null });
       else sendResponse({ ok:false, error: resp?.error || "Upload failed" });
@@ -187,4 +213,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // keep channel open
 });
 
-log('TechX content script ready (Q&A full):', location.href);
+log('TechX content script ready (global Q&A):', location.href);
