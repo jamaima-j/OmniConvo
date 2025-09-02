@@ -186,7 +186,7 @@ async function postForm(htmlDoc, { model, sourceUrl, title }, timeoutMs = 120000
 
   let resp;
   try {
-    resp = await fetch("https://jomniconvo.duckdns.org/api/conversation", {
+     resp = await fetch(`${API_BASE}/api/conversation`, {
       method: "POST",
       body: fd,
       cache: "no-store",
@@ -240,6 +240,67 @@ async function uploadConversation(innerHtml, meta) {
 }
 
 // ---------------- message routing ----------------
+// === MCP archiving helpers ===
+const MCP_ENDPOINT = 'http://127.0.0.1:8000/api/save';
+// If you added auth middleware, keep this. If not, it's harmless to send.
+const OMNI_KEY = 'dev-secret';
+
+function stripHtmlToText(html) {
+  if (typeof html !== 'string') return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\r/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function archiveToMCP(innerHtml, meta = {}) {
+  try {
+    const title = meta.title || 'Grok Chat';
+    const model = meta.model || 'grok-4';
+    const source = meta.source || 'grok-web';
+    const link = meta.url || meta.sourceUrl; // accept either
+    // keep payload small; server limit is 5MB; trim to ~100k chars
+    const text = stripHtmlToText(innerHtml);
+    const max = 100_000;
+    const safeText = text.length > max ? text.slice(0, max) + '\n...[truncated]...' : text;
+
+    const payload = {
+      title,
+      model,
+      source,
+      messages: [
+        link ? { role: 'system', content: `URL: ${link}` } : null,
+        { role: 'assistant', content: safeText }
+      ].filter(Boolean)
+    };
+
+    const res = await fetch(MCP_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-omni-key': OMNI_KEY
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const msg = await res.text().catch(() => '');
+      throw new Error(`MCP save failed (${res.status}): ${msg}`);
+    }
+    return await res.json(); // { ok: true, path: "C:\\..." }
+  } catch (e) {
+    // don't break your flow if archiving fails
+    console.debug('[MCP] archive error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "TECHX_UPLOAD_INIT") {
     const tabId = sender?.tab?.id ?? -1;
@@ -274,32 +335,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg?.type === "TECHX_UPLOAD_COMMIT") {
-    const sess = uploads.get(msg.uploadId);
-    if (!sess) { sendResponse({ ok: false, error: "No active upload session" }); return; }
+  const sess = uploads.get(msg.uploadId);
+  if (!sess) { sendResponse({ ok: false, error: "No active upload session" }); return; }
 
-    (async () => {
-      try {
-        clearTimeout(sess.t);
-        const total = typeof sess.total === "number" ? sess.total : sess.chunks.size;
-        const parts = [];
-        for (let i = 0; i < total; i++) parts.push(sess.chunks.get(i) || "");
-        const innerHtml = parts.join("");
+  (async () => {
+    try {
+      clearTimeout(sess.t);
+      const total = typeof sess.total === "number" ? sess.total : sess.chunks.size;
+      const parts = [];
+      for (let i = 0; i < total; i++) parts.push(sess.chunks.get(i) || "");
+      const innerHtml = parts.join("");
 
-        const res = await uploadConversation(innerHtml, sess.meta);
+      // NEW: choose where to save
+      const mode = (sess.meta?.saveTo || "remote"); // "remote" | "mcp" | "both"
 
-        if (msg.openTab && res?.ok && res?.url) {
-          try { await chrome.tabs.create({ url: res.url, active: true }); } catch {}
-        }
+      let remoteRes = null, mcpRes = null;
 
-        sendResponse(res);
-      } catch (err) {
-        sendResponse({ ok: false, error: String(err?.message || err) });
-      } finally {
-        uploads.delete(msg.uploadId);
-        busyByTab.delete(sess.tabId);
+      if (mode === "remote" || mode === "both") {
+        remoteRes = await uploadConversation(innerHtml, sess.meta);
       }
-    })();
+      if (mode === "mcp" || mode === "both") {
+        mcpRes = await archiveToMCP(innerHtml, sess.meta);
+        console.debug("[MCP] archive result:", mcpRes);
+      }
 
-    return true;
-  }
+      // Prefer remote result if present, otherwise MCP result
+      const finalRes = remoteRes ?? mcpRes ?? { ok: false, error: "No upload performed" };
+
+      if (msg.openTab && finalRes?.ok && finalRes?.url) {
+        try { await chrome.tabs.create({ url: finalRes.url, active: true }); } catch {}
+      }
+
+      // Include MCP status for debugging (doesn't break your existing consumers)
+      sendResponse({ ...finalRes, mcp: mcpRes || undefined });
+    } catch (err) {
+      sendResponse({ ok: false, error: String(err?.message || err) });
+    } finally {
+      uploads.delete(msg.uploadId);
+      busyByTab.delete(sess.tabId);
+    }
+  })();
+
+  return true;
+}
+
 });

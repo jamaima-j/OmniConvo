@@ -148,8 +148,10 @@ async function uploadInChunks(innerHtml, meta) {
     meta: {
       title: meta.title || document.title || "Saved Conversation",
       model: meta.model || "Grok",
-      source: meta.source || "Grok",
-      sourceUrl: location.href
+      source: meta.source || "grok-web",
+      sourceUrl: location.href,
+      url: location.href,           // helps MCP (background accepts url OR sourceUrl)
+      saveTo: meta.saveTo ?? "remote"  // "remote" | "mcp" | "both"
     }
   });
   if (!init?.ok) return init;
@@ -194,13 +196,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const messages = collectMessages();
       log('Collected messages:', messages.length);
 
-      const minimalHtml = buildMinimalConversationHTML(messages);
+       const minimalHtml = buildMinimalConversationHTML(messages);
       const resp = await uploadInChunks(minimalHtml, {
         model,
-        source: "Grok",
-        title: document.title || "Saved Conversation"
+        source: "grok-web",
+        title: document.title || "Saved Conversation",
+        saveTo: msg?.saveTo ?? "remote"  // let popup choose: "remote" | "mcp" | "both"
       });
-
       busy = false;
       if (resp?.ok) sendResponse({ ok:true, url: resp.url || null });
       else sendResponse({ ok:false, error: resp?.error || "Upload failed" });
