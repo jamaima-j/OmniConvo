@@ -151,7 +151,7 @@ async function uploadInChunks(innerHtml, meta) {
       source: meta.source || "grok-web",
       sourceUrl: location.href,
       url: location.href,           // helps MCP (background accepts url OR sourceUrl)
-      saveTo: meta.saveTo ?? "remote"  // "remote" | "mcp" | "both"
+      saveTo: meta.saveTo ?? "both"  // "remote" | "mcp" | "both"
     }
   });
   if (!init?.ok) return init;
@@ -201,7 +201,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         model,
         source: "grok-web",
         title: document.title || "Saved Conversation",
-        saveTo: msg?.saveTo ?? "remote"  // let popup choose: "remote" | "mcp" | "both"
+        saveTo: msg?.saveTo ?? "both"  // let popup choose: "remote" | "mcp" | "both"
       });
       busy = false;
       if (resp?.ok) sendResponse({ ok:true, url: resp.url || null });
